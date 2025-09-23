@@ -37,6 +37,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.gravitino.Entity;
 import org.apache.gravitino.MetadataObject;
 import org.apache.gravitino.NameIdentifier;
+import org.apache.gravitino.authorization.AuthorizationRequestContext;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationMetadata;
 import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionEvaluator;
@@ -128,7 +129,8 @@ public class GravitinoInterceptionService implements InterceptionService {
           AuthorizationExpressionEvaluator authorizationExpressionEvaluator =
               new AuthorizationExpressionEvaluator(expression);
           boolean authorizeResult =
-              authorizationExpressionEvaluator.evaluate(metadataContext, pathParams);
+              authorizationExpressionEvaluator.evaluate(
+                  metadataContext, pathParams, new AuthorizationRequestContext());
           if (!authorizeResult) {
             MetadataObject.Type type = expressionAnnotation.accessMetadataType();
             NameIdentifier accessMetadataName =
@@ -157,9 +159,8 @@ public class GravitinoInterceptionService implements InterceptionService {
             currentUser,
             methodName,
             ex);
-        return Utils.forbidden(
-            "Authorization failed due to system internal error. Please contact administrator.",
-            null);
+        return Utils.internalError(
+            "Authorization failed due to system internal error. Please contact administrator.", ex);
       }
     }
 
@@ -169,16 +170,20 @@ public class GravitinoInterceptionService implements InterceptionService {
         String currentUser,
         String methodName) {
       String contextualMessage;
+      String accessMetadataMessage =
+          accessMetadataName != null
+              ? String.format("on metadata '%s'", accessMetadataName.name())
+              : "";
       if (StringUtils.isNotBlank(errorMessage)) {
         contextualMessage =
             String.format(
-                "User '%s' is not authorized to perform operation '%s' on metadata '%s': %s",
-                currentUser, methodName, accessMetadataName.name(), errorMessage);
+                "User '%s' is not authorized to perform operation '%s' %s: %s",
+                currentUser, methodName, accessMetadataMessage, errorMessage);
       } else {
         contextualMessage =
             String.format(
-                "User '%s' is not authorized to perform operation '%s' on metadata '%s'",
-                currentUser, methodName, accessMetadataName.name());
+                "User '%s' is not authorized to perform operation '%s' %s",
+                currentUser, methodName, accessMetadataMessage);
       }
       return Utils.forbidden(contextualMessage, null);
     }
@@ -234,7 +239,7 @@ public class GravitinoInterceptionService implements InterceptionService {
                 String model = entities.get(Entity.EntityType.MODEL);
                 nameIdentifierMap.put(
                     Entity.EntityType.MODEL,
-                    NameIdentifierUtil.ofModel(metadata, catalog, schema, model));
+                    NameIdentifierUtil.ofModel(metalake, catalog, schema, model));
                 break;
               case METALAKE:
                 nameIdentifierMap.put(

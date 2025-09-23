@@ -18,10 +18,11 @@
  */
 package org.apache.gravitino.storage.relational.service;
 
+import static org.apache.gravitino.metrics.source.MetricsSource.GRAVITINO_RELATIONAL_STORE_METRIC_NAME;
+
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Multimap;
 import java.io.IOException;
@@ -41,7 +42,7 @@ import org.apache.gravitino.Namespace;
 import org.apache.gravitino.exceptions.NoSuchEntityException;
 import org.apache.gravitino.meta.ModelEntity;
 import org.apache.gravitino.meta.ModelVersionEntity;
-import org.apache.gravitino.model.ModelVersion;
+import org.apache.gravitino.metrics.Monitored;
 import org.apache.gravitino.storage.relational.mapper.ModelMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.ModelVersionAliasRelMapper;
 import org.apache.gravitino.storage.relational.mapper.ModelVersionMetaMapper;
@@ -63,6 +64,9 @@ public class ModelVersionMetaService {
 
   private ModelVersionMetaService() {}
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "listModelVersionsByNamespace")
   public List<ModelVersionEntity> listModelVersionsByNamespace(Namespace ns) {
     NamespaceUtil.checkModelVersion(ns);
 
@@ -104,6 +108,9 @@ public class ModelVersionMetaService {
             .values());
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getModelVersionByIdentifier")
   public ModelVersionEntity getModelVersionByIdentifier(NameIdentifier ident) {
     NameIdentifierUtil.checkModelVersion(ident);
 
@@ -148,6 +155,9 @@ public class ModelVersionMetaService {
     return POConverters.fromModelVersionPO(modelIdent, modelVersionPOs, aliasRelPOs);
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "insertModelVersion")
   public void insertModelVersion(ModelVersionEntity modelVersionEntity) throws IOException {
     NameIdentifier modelIdent = modelVersionEntity.modelIdentifier();
     NameIdentifierUtil.checkModel(modelIdent);
@@ -188,6 +198,9 @@ public class ModelVersionMetaService {
     }
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deleteModelVersion")
   public boolean deleteModelVersion(NameIdentifier ident) {
     NameIdentifierUtil.checkModelVersion(ident);
 
@@ -207,7 +220,7 @@ public class ModelVersionMetaService {
         // Delete model version relations first
         () ->
             modelVersionDeletedCount.set(
-                SessionUtils.doWithoutCommitAndFetchResult(
+                SessionUtils.getWithoutCommit(
                     ModelVersionMetaMapper.class,
                     mapper -> {
                       if (isVersionNumber) {
@@ -240,6 +253,9 @@ public class ModelVersionMetaService {
     return modelVersionDeletedCount.get() > 0;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deleteModelVersionMetasByLegacyTimeline")
   public int deleteModelVersionMetasByLegacyTimeline(Long legacyTimeline, int limit) {
     int[] modelVersionDeletedCount = new int[] {0};
     int[] modelVersionAliasRelDeletedCount = new int[] {0};
@@ -247,13 +263,13 @@ public class ModelVersionMetaService {
     SessionUtils.doMultipleWithCommit(
         () ->
             modelVersionDeletedCount[0] =
-                SessionUtils.doWithoutCommitAndFetchResult(
+                SessionUtils.getWithoutCommit(
                     ModelVersionMetaMapper.class,
                     mapper ->
                         mapper.deleteModelVersionMetasByLegacyTimeline(legacyTimeline, limit)),
         () ->
             modelVersionAliasRelDeletedCount[0] =
-                SessionUtils.doWithoutCommitAndFetchResult(
+                SessionUtils.getWithoutCommit(
                     ModelVersionAliasRelMapper.class,
                     mapper ->
                         mapper.deleteModelVersionAliasRelsByLegacyTimeline(legacyTimeline, limit)));
@@ -270,6 +286,9 @@ public class ModelVersionMetaService {
    * @param <E> the type of the entity to update
    * @throws IOException if an error occurs while updating the entity
    */
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "updateModelVersion")
   public <E extends Entity & HasIdentifier> ModelVersionEntity updateModelVersion(
       NameIdentifier ident, Function<E, E> updater) throws IOException {
     NameIdentifierUtil.checkModelVersion(ident);
@@ -326,36 +345,46 @@ public class ModelVersionMetaService {
     List<ModelVersionAliasRelPO> newAliasRelPOs =
         POConverters.updateModelVersionAliasRelPO(oldAliasRelPOs, newModelVersionEntity);
 
+    boolean isModelVersionUriUpdated =
+        isModelVersionUriUpdated(oldModelVersionEntity, newModelVersionEntity);
+
     final AtomicInteger updateResult = new AtomicInteger(0);
     try {
       SessionUtils.doMultipleWithCommit(
-          () ->
+          () -> {
+            if (isModelVersionUriUpdated) {
+              // delete old model version POs first
               updateResult.addAndGet(
-                  SessionUtils.doWithoutCommitAndFetchResult(
+                  SessionUtils.getWithoutCommit(
+                      ModelVersionMetaMapper.class,
+                      mapper -> {
+                        if (isVersionNumber) {
+                          return mapper.softDeleteModelVersionMetaByModelIdAndVersion(
+                              modelEntity.id(), Integer.valueOf(ident.name()));
+                        } else {
+                          return mapper.softDeleteModelVersionMetaByModelIdAndAlias(
+                              modelEntity.id(), ident.name());
+                        }
+                      }));
+
+              // insert model version POs with updated URIs
+              List<ModelVersionPO> modelVersionPOs =
+                  POConverters.initializeModelVersionPO(newModelVersionEntity, modelEntity.id());
+              SessionUtils.doWithoutCommit(
+                  ModelVersionMetaMapper.class,
+                  mapper -> mapper.insertModelVersionMetasWithVersionNumber(modelVersionPOs));
+            } else {
+              // update model version POs directly
+              updateResult.addAndGet(
+                  SessionUtils.getWithoutCommit(
                       ModelVersionMetaMapper.class,
                       mapper ->
                           mapper.updateModelVersionMeta(
                               POConverters.updateModelVersionPO(
                                   oldModelVersionPOs.get(0), newModelVersionEntity),
-                              oldModelVersionPOs.get(0)))),
-          () ->
-              oldModelVersionPOs.stream()
-                  .filter(v -> isModelVersionUriUpdated(v, newModelVersionEntity.uris()))
-                  .findAny()
-                  .ifPresent(
-                      v ->
-                          updateResult.addAndGet(
-                              SessionUtils.doWithoutCommitAndFetchResult(
-                                  ModelVersionMetaMapper.class,
-                                  mapper ->
-                                      mapper.updateModelVersionUris(
-                                          v.getModelId(),
-                                          v.getModelVersion(),
-                                          ImmutableMap.of(
-                                              ModelVersion.URI_NAME_UNKNOWN,
-                                              newModelVersionEntity
-                                                  .uris()
-                                                  .get(ModelVersion.URI_NAME_UNKNOWN)))))),
+                              oldModelVersionPOs.get(0))));
+            }
+          },
           () -> {
             if (isAliasChanged) {
               SessionUtils.doWithoutCommit(
@@ -399,13 +428,10 @@ public class ModelVersionMetaService {
     return !oldAliases.equals(newAliases);
   }
 
-  // TODO Only modifying the unknown URI is supported currently.
   private boolean isModelVersionUriUpdated(
-      ModelVersionPO oldModelVersionPO, Map<String, String> newModelVersionUris) {
-    return ModelVersion.URI_NAME_UNKNOWN.equals(oldModelVersionPO.getModelVersionUriName())
-        && newModelVersionUris.containsKey(ModelVersion.URI_NAME_UNKNOWN)
-        && !oldModelVersionPO
-            .getModelVersionUri()
-            .equals(newModelVersionUris.get(ModelVersion.URI_NAME_UNKNOWN));
+      ModelVersionEntity oldModelVersionEntity, ModelVersionEntity newModelVersionEntity) {
+    Map<String, String> oldUris = oldModelVersionEntity.uris();
+    Map<String, String> newUris = newModelVersionEntity.uris();
+    return !oldUris.equals(newUris);
   }
 }

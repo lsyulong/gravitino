@@ -26,6 +26,7 @@ import ognl.OgnlException;
 import org.apache.gravitino.dto.requests.SchemaCreateRequest;
 import org.apache.gravitino.dto.requests.SchemaUpdatesRequest;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
+import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
 import org.apache.gravitino.server.web.rest.SchemaOperations;
 import org.junit.jupiter.api.Test;
 
@@ -50,6 +51,16 @@ public class TestSchemaAuthorizationExpression {
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("METALAKE::CREATE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::CREATE_SCHEMA",
+                "CATALOG::DENY_CREATE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::CREATE_SCHEMA", "METALAKE::USE_CATALOG", "CATALOG::DENY_USE_CATALOG")));
   }
 
   @Test
@@ -70,12 +81,21 @@ public class TestSchemaAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("CATALOG::USE_CATALOG")));
     assertTrue(
         mockEvaluator.getResult(ImmutableSet.of("CATALOG::USE_CATALOG", "METALAKE::USE_SCHEMA")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "CATALOG::USE_CATALOG", "METALAKE::USE_SCHEMA", "SCHEMA::DENY_USE_SCHEMA")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "CATALOG::USE_CATALOG", "METALAKE::DENY_USE_SCHEMA", "SCHEMA::USE_SCHEMA")));
   }
 
   @Test
   public void testListSchema() throws NoSuchFieldException, IllegalAccessException, OgnlException {
     Field loadTableAuthorizationExpressionField =
-        SchemaOperations.class.getDeclaredField("loadSchemaAuthorizationExpression");
+        AuthorizationExpressionConstants.class.getDeclaredField(
+            "loadSchemaAuthorizationExpression");
     loadTableAuthorizationExpressionField.setAccessible(true);
     String loadTableAuthExpression = (String) loadTableAuthorizationExpressionField.get(null);
     MockAuthorizationExpressionEvaluator mockEvaluator =
@@ -89,6 +109,10 @@ public class TestSchemaAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("METALAKE::USE_SCHEMA")));
     assertTrue(
         mockEvaluator.getResult(ImmutableSet.of("CATALOG::USE_CATALOG", "METALAKE::USE_SCHEMA")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "CATALOG::USE_CATALOG", "METALAKE::DENY_USE_SCHEMA", "CATALOG::USE_SCHEMA")));
   }
 
   @Test
@@ -112,6 +136,10 @@ public class TestSchemaAuthorizationExpression {
         mockEvaluator.getResult(ImmutableSet.of("CATALOG::USE_CATALOG", "METALAKE::USE_SCHEMA")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER", "CATALOG::USE_CATALOG", "METALAKE::DENY_USE_CATALOG")));
   }
 
   @Test
@@ -133,5 +161,9 @@ public class TestSchemaAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("CATALOG::USE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER", "CATALOG::USE_CATALOG", "METALAKE::DENY_USE_CATALOG")));
   }
 }

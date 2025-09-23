@@ -20,8 +20,6 @@ package org.apache.gravitino.server.web.rest;
 
 import com.codahale.metrics.annotation.ResponseMetered;
 import com.codahale.metrics.annotation.Timed;
-import java.util.Arrays;
-import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.Consumes;
@@ -59,6 +57,7 @@ import org.apache.gravitino.metrics.MetricNames;
 import org.apache.gravitino.server.authorization.MetadataFilterHelper;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationMetadata;
+import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
 import org.apache.gravitino.server.web.Utils;
 import org.apache.gravitino.utils.NameIdentifierUtil;
 import org.apache.gravitino.utils.NamespaceUtil;
@@ -73,9 +72,6 @@ public class CatalogOperations {
   private static final Logger LOG = LoggerFactory.getLogger(CatalogOperations.class);
 
   private final CatalogDispatcher catalogDispatcher;
-
-  private static final String loadCatalogAuthorizationExpression =
-      "ANY_USE_CATALOG || ANY(OWNER, METALAKE, CATALOG)";
 
   @Context private HttpServletRequest httpRequest;
 
@@ -104,23 +100,13 @@ public class CatalogOperations {
             if (verbose) {
               Catalog[] catalogs = catalogDispatcher.listCatalogsInfo(catalogNS);
               catalogs =
-                  Arrays.stream(catalogs)
-                      .filter(
-                          catalog -> {
-                            NameIdentifier[] nameIdentifiers =
-                                new NameIdentifier[] {
-                                  NameIdentifierUtil.ofCatalog(metalake, catalog.name())
-                                };
-                            return MetadataFilterHelper.filterByExpression(
-                                        metalake,
-                                        loadCatalogAuthorizationExpression,
-                                        Entity.EntityType.CATALOG,
-                                        nameIdentifiers)
-                                    .length
-                                > 0;
-                          })
-                      .collect(Collectors.toList())
-                      .toArray(new Catalog[0]);
+                  MetadataFilterHelper.filterByExpression(
+                      metalake,
+                      AuthorizationExpressionConstants.loadCatalogAuthorizationExpression,
+                      Entity.EntityType.CATALOG,
+                      catalogs,
+                      (catalogEntity) ->
+                          NameIdentifierUtil.ofCatalog(metalake, catalogEntity.name()));
               Response response = Utils.ok(new CatalogListResponse(DTOConverters.toDTOs(catalogs)));
               LOG.info("List {} catalogs info under metalake: {}", catalogs.length, metalake);
               return response;
@@ -129,7 +115,7 @@ public class CatalogOperations {
               idents =
                   MetadataFilterHelper.filterByExpression(
                       metalake,
-                      loadCatalogAuthorizationExpression,
+                      AuthorizationExpressionConstants.loadCatalogAuthorizationExpression,
                       Entity.EntityType.CATALOG,
                       idents);
               Response response = Utils.ok(new EntityListResponse(idents));
@@ -148,7 +134,7 @@ public class CatalogOperations {
   @ResponseMetered(name = "create-catalog", absolute = true)
   @AuthorizationExpression(
       expression = "METALAKE::CREATE_CATALOG || METALAKE::OWNER",
-      accessMetadataType = MetadataObject.Type.CATALOG)
+      accessMetadataType = MetadataObject.Type.METALAKE)
   public Response createCatalog(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
           String metalake,
@@ -345,9 +331,10 @@ public class CatalogOperations {
             boolean dropped = catalogDispatcher.dropCatalog(ident, force);
             if (!dropped) {
               LOG.warn("Failed to drop catalog {} under metalake {}", catalogName, metalakeName);
+            } else {
+              LOG.info("Catalog dropped: {}.{}", metalakeName, catalogName);
             }
             Response response = Utils.ok(new DropResponse(dropped));
-            LOG.info("Catalog dropped: {}.{}", metalakeName, catalogName);
             return response;
           });
     } catch (Exception e) {

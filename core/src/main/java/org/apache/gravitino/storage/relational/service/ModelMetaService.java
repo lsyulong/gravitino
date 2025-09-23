@@ -19,6 +19,8 @@
 
 package org.apache.gravitino.storage.relational.service;
 
+import static org.apache.gravitino.metrics.source.MetricsSource.GRAVITINO_RELATIONAL_STORE_METRIC_NAME;
+
 import com.google.common.base.Preconditions;
 import java.io.IOException;
 import java.util.List;
@@ -34,11 +36,14 @@ import org.apache.gravitino.NameIdentifier;
 import org.apache.gravitino.Namespace;
 import org.apache.gravitino.exceptions.NoSuchEntityException;
 import org.apache.gravitino.meta.ModelEntity;
+import org.apache.gravitino.metrics.Monitored;
 import org.apache.gravitino.storage.relational.mapper.ModelMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.ModelVersionAliasRelMapper;
 import org.apache.gravitino.storage.relational.mapper.ModelVersionMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.OwnerMetaMapper;
+import org.apache.gravitino.storage.relational.mapper.PolicyMetadataObjectRelMapper;
 import org.apache.gravitino.storage.relational.mapper.SecurableObjectMapper;
+import org.apache.gravitino.storage.relational.mapper.StatisticMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.TagMetadataObjectRelMapper;
 import org.apache.gravitino.storage.relational.po.ModelPO;
 import org.apache.gravitino.storage.relational.utils.ExceptionUtils;
@@ -61,6 +66,9 @@ public class ModelMetaService {
 
   private ModelMetaService() {}
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "listModelsByNamespace")
   public List<ModelEntity> listModelsByNamespace(Namespace ns) {
     NamespaceUtil.checkModel(ns);
 
@@ -73,11 +81,15 @@ public class ModelMetaService {
     return modelPOs.stream().map(m -> POConverters.fromModelPO(m, ns)).collect(Collectors.toList());
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getModelByIdentifier")
   public ModelEntity getModelByIdentifier(NameIdentifier ident) {
     ModelPO modelPO = getModelPOByIdentifier(ident);
     return POConverters.fromModelPO(modelPO, ident.namespace());
   }
 
+  @Monitored(metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME, baseMetricName = "insertModel")
   public void insertModel(ModelEntity modelEntity, boolean overwrite) throws IOException {
     NameIdentifierUtil.checkModel(modelEntity.nameIdentifier());
 
@@ -102,6 +114,7 @@ public class ModelMetaService {
     }
   }
 
+  @Monitored(metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME, baseMetricName = "deleteModel")
   public boolean deleteModel(NameIdentifier ident) {
     NameIdentifierUtil.checkModel(ident);
 
@@ -135,7 +148,7 @@ public class ModelMetaService {
         // delete model meta
         () ->
             modelDeletedCount.set(
-                SessionUtils.doWithoutCommitAndFetchResult(
+                SessionUtils.getWithoutCommit(
                     ModelMetaMapper.class,
                     mapper ->
                         mapper.softDeleteModelMetaBySchemaIdAndModelName(schemaId, ident.name()))),
@@ -156,17 +169,33 @@ public class ModelMetaService {
                 TagMetadataObjectRelMapper.class,
                 mapper ->
                     mapper.softDeleteTagMetadataObjectRelsByMetadataObject(
+                        modelId, MetadataObject.Type.MODEL.name())),
+        () ->
+            SessionUtils.doWithoutCommit(
+                StatisticMetaMapper.class,
+                mapper -> mapper.softDeleteStatisticsByEntityId(modelId)),
+        () ->
+            SessionUtils.doWithoutCommit(
+                PolicyMetadataObjectRelMapper.class,
+                mapper ->
+                    mapper.softDeletePolicyMetadataObjectRelsByMetadataObject(
                         modelId, MetadataObject.Type.MODEL.name())));
 
     return modelDeletedCount.get() > 0;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deleteModelMetasByLegacyTimeline")
   public int deleteModelMetasByLegacyTimeline(Long legacyTimeline, int limit) {
     return SessionUtils.doWithCommitAndFetchResult(
         ModelMetaMapper.class,
         mapper -> mapper.deleteModelMetasByLegacyTimeline(legacyTimeline, limit));
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getModelIdBySchemaIdAndModelName")
   Long getModelIdBySchemaIdAndModelName(Long schemaId, String modelName) {
     Long modelId =
         SessionUtils.getWithoutCommit(
@@ -183,6 +212,9 @@ public class ModelMetaService {
     return modelId;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getModelPOById")
   ModelPO getModelPOById(Long modelId) {
     ModelPO modelPO =
         SessionUtils.getWithoutCommit(
@@ -206,6 +238,9 @@ public class ModelMetaService {
     builder.withSchemaId(parentEntityIds[2]);
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getModelPOByIdentifier")
   ModelPO getModelPOByIdentifier(NameIdentifier ident) {
     NameIdentifierUtil.checkModel(ident);
 
@@ -225,6 +260,7 @@ public class ModelMetaService {
     return modelPO;
   }
 
+  @Monitored(metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME, baseMetricName = "updateModel")
   public <E extends Entity & HasIdentifier> ModelEntity updateModel(
       NameIdentifier identifier, Function<E, E> updater) throws IOException {
     NameIdentifierUtil.checkModel(identifier);
@@ -248,7 +284,7 @@ public class ModelMetaService {
                       POConverters.updateModelPO(oldModelPO, newEntity), oldModelPO));
     } catch (RuntimeException re) {
       ExceptionUtils.checkSQLException(
-          re, Entity.EntityType.CATALOG, newEntity.nameIdentifier().toString());
+          re, Entity.EntityType.MODEL, newEntity.nameIdentifier().toString());
       throw re;
     }
 

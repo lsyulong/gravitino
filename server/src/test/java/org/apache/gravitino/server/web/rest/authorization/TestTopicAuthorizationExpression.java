@@ -27,6 +27,7 @@ import ognl.OgnlException;
 import org.apache.gravitino.dto.requests.TopicCreateRequest;
 import org.apache.gravitino.dto.requests.TopicUpdatesRequest;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
+import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
 import org.apache.gravitino.server.web.rest.TopicOperations;
 import org.junit.jupiter.api.Test;
 
@@ -56,12 +57,27 @@ public class TestTopicAuthorizationExpression {
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("SCHEMA::CREATE_TOPIC", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::CREATE_TOPIC",
+                "METALAKE::DENY_CREATE_TOPIC",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::DENY_CREATE_TOPIC",
+                "METALAKE::CREATE_TOPIC",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
   }
 
   @Test
   public void testLoadTopics() throws OgnlException, NoSuchFieldException, IllegalAccessException {
     Field loadTopicsAuthorizationExpressionField =
-        TopicOperations.class.getDeclaredField("loadTopicsAuthorizationExpression");
+        AuthorizationExpressionConstants.class.getDeclaredField(
+            "loadTopicsAuthorizationExpression");
     loadTopicsAuthorizationExpressionField.setAccessible(true);
     String loadTopicsAuthorizationExpression =
         (String) loadTopicsAuthorizationExpressionField.get(null);
@@ -102,6 +118,20 @@ public class TestTopicAuthorizationExpression {
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("SCHEMA::OWNER", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG",
+                "METALAKE::DENY_USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER",
+                "SCHEMA::DENY_USE_SCHEMA",
+                "CATALOG::DENY_USE_CATALOG",
+                "METALAKE::USE_CATALOG")));
   }
 
   @Test
@@ -144,6 +174,20 @@ public class TestTopicAuthorizationExpression {
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("SCHEMA::OWNER", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG",
+                "METALAKE::DENY_USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER",
+                "SCHEMA::DENY_USE_SCHEMA",
+                "CATALOG::DENY_USE_CATALOG",
+                "METALAKE::USE_CATALOG")));
   }
 
   @Test
@@ -182,5 +226,19 @@ public class TestTopicAuthorizationExpression {
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("SCHEMA::OWNER", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG",
+                "METALAKE::DENY_USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER",
+                "SCHEMA::DENY_USE_SCHEMA",
+                "CATALOG::DENY_USE_CATALOG",
+                "METALAKE::USE_CATALOG")));
   }
 }

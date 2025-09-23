@@ -17,7 +17,7 @@
 
 import unittest
 
-from gravitino.api.types.types import Types
+from gravitino.api.rel.types.types import Types
 from gravitino.dto.rel.column_dto import ColumnDTO
 from gravitino.dto.rel.expressions.field_reference_dto import FieldReferenceDTO
 from gravitino.dto.rel.expressions.func_expression_dto import FuncExpressionDTO
@@ -56,7 +56,7 @@ class TestFunctionArg(unittest.TestCase):
         literal_dto.validate(columns=self._columns)
 
         field_ref_dto = (
-            FieldReferenceDTO.builder().with_column_name(self._column_names).build()
+            FieldReferenceDTO.builder().with_column_name(self._column_names[0]).build()
         )
         field_ref_dto.validate(columns=self._columns)
 

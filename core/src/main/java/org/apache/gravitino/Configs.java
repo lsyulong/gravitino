@@ -28,6 +28,7 @@ import org.apache.gravitino.audit.v2.SimpleFormatterV2;
 import org.apache.gravitino.config.ConfigBuilder;
 import org.apache.gravitino.config.ConfigConstants;
 import org.apache.gravitino.config.ConfigEntry;
+import org.apache.gravitino.stats.storage.LancePartitionStatisticStorageFactory;
 
 public class Configs {
 
@@ -91,6 +92,8 @@ public class Configs {
   public static final String DEFAULT_RELATIONAL_JDBC_BACKEND_PASSWORD = "gravitino";
 
   public static final int DEFAULT_RELATIONAL_JDBC_BACKEND_MAX_CONNECTIONS = 100;
+
+  public static final int DEFAULT_GRAVITINO_AUTHORIZATION_THREAD_POOL_SIZE = 100;
 
   public static final long DEFAULT_RELATIONAL_JDBC_BACKEND_MAX_WAIT_MILLISECONDS = 1000L;
 
@@ -290,7 +293,14 @@ public class Configs {
           .doc("Metadata authorization implementation")
           .version(ConfigConstants.VERSION_1_0_0)
           .stringConf()
-          .createWithDefault("org.apache.gravitino.server.authorization.PassThroughAuthorizer");
+          .createWithDefault("org.apache.gravitino.server.authorization.jcasbin.JcasbinAuthorizer");
+
+  public static final ConfigEntry<Integer> GRAVITINO_AUTHORIZATION_THREAD_POOL_SIZE =
+      new ConfigBuilder("gravitino.authorization.threadPoolSize")
+          .doc("The thread pool size of metadata authorization requests")
+          .version(ConfigConstants.VERSION_1_0_0)
+          .intConf()
+          .createWithDefault(DEFAULT_GRAVITINO_AUTHORIZATION_THREAD_POOL_SIZE);
 
   public static final ConfigEntry<List<String>> SERVICE_ADMINS =
       new ConfigBuilder("gravitino.authorization.serviceAdmins")
@@ -407,6 +417,23 @@ public class Configs {
           .checkValue(StringUtils::isNotBlank, ConfigConstants.NOT_BLANK_ERROR_MSG)
           .createWithDefault("caffeine");
 
+  // Number of lock segments for cache concurrency optimization
+  public static final ConfigEntry<Integer> CACHE_LOCK_SEGMENTS =
+      new ConfigBuilder("gravitino.cache.lockSegments")
+          .doc(
+              "Number of lock segments for cache concurrency optimization. "
+                  + "This configuration controls the granularity of locking in the cache system. "
+                  + "Instead of using a single global lock, Gravitino uses Guava's Striped<Lock> "
+                  + "to divide locks into segments, allowing concurrent access to different cache "
+                  + "entries while maintaining thread safety. Higher values reduce lock contention "
+                  + "but increase memory overhead. The actual number of segments will be rounded "
+                  + "up to the nearest power of 2 for optimal performance. "
+                  + "See: https://github.com/google/guava/wiki/StripedExplained")
+          .version(ConfigConstants.VERSION_1_0_0)
+          .intConf()
+          .checkValue(value -> value > 0, "Lock segments must be positive.")
+          .createWithDefault(16);
+
   public static final ConfigEntry<String> JOB_STAGING_DIR =
       new ConfigBuilder("gravitino.job.stagingDir")
           .doc("Directory for managing staging files when running jobs.")
@@ -424,4 +451,32 @@ public class Configs {
           .stringConf()
           .checkValue(StringUtils::isNotBlank, ConfigConstants.NOT_BLANK_ERROR_MSG)
           .createWithDefault("local");
+
+  public static final ConfigEntry<Long> JOB_STAGING_DIR_KEEP_TIME_IN_MS =
+      new ConfigBuilder("gravitino.job.stagingDirKeepTimeInMs")
+          .doc(
+              "The time in milliseconds to keep the staging files of the finished job in the job"
+                  + " staging directory. The minimum recommended value is 10 minutes if you're "
+                  + "not testing.")
+          .version(ConfigConstants.VERSION_1_0_0)
+          .longConf()
+          .checkValue(value -> value > 0, ConfigConstants.POSITIVE_NUMBER_ERROR_MSG)
+          .createWithDefault(7 * 24 * 3600 * 1000L); // Default is 7 days
+
+  public static final ConfigEntry<Long> JOB_STATUS_PULL_INTERVAL_IN_MS =
+      new ConfigBuilder("gravitino.job.statusPullIntervalInMs")
+          .doc(
+              "The interval in milliseconds to pull the job status from the job executor. The "
+                  + "minimum recommended value is 1 minute if you're not testing.")
+          .version(ConfigConstants.VERSION_1_0_0)
+          .longConf()
+          .checkValue(value -> value > 0, ConfigConstants.POSITIVE_NUMBER_ERROR_MSG)
+          .createWithDefault(5 * 60 * 1000L); // Default is 5 minutes
+
+  public static final ConfigEntry<String> PARTITION_STATS_STORAGE_FACTORY_CLASS =
+      new ConfigBuilder("gravitino.stats.partition.storageFactoryClass")
+          .doc("The partition stats storage factory class.")
+          .version(ConfigConstants.VERSION_1_0_0)
+          .stringConf()
+          .createWithDefault(LancePartitionStatisticStorageFactory.class.getCanonicalName());
 }

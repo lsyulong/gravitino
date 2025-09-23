@@ -26,6 +26,7 @@ import ognl.OgnlException;
 import org.apache.gravitino.dto.requests.CatalogCreateRequest;
 import org.apache.gravitino.dto.requests.CatalogUpdatesRequest;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
+import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
 import org.apache.gravitino.server.web.rest.CatalogOperations;
 import org.junit.jupiter.api.Test;
 
@@ -63,12 +64,19 @@ public class TestCatalogAuthorizationExpression {
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("CATALOG::OWNER")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("METALAKE::CREATE_CATALOG")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of("METALAKE::USE_CATALOG", "CATALOG::DENY_USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of("METALAKE::DENY_USE_CATALOG", "CATALOG::USE_CATALOG")));
   }
 
   @Test
   public void testListCatalog() throws NoSuchFieldException, IllegalAccessException, OgnlException {
     Field loadTableAuthorizationExpressionField =
-        CatalogOperations.class.getDeclaredField("loadCatalogAuthorizationExpression");
+        AuthorizationExpressionConstants.class.getDeclaredField(
+            "loadCatalogAuthorizationExpression");
     loadTableAuthorizationExpressionField.setAccessible(true);
     String loadTableAuthExpression = (String) loadTableAuthorizationExpressionField.get(null);
     MockAuthorizationExpressionEvaluator mockEvaluator =
@@ -80,6 +88,12 @@ public class TestCatalogAuthorizationExpression {
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("CATALOG::OWNER")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("METALAKE::CREATE_CATALOG")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of("METALAKE::USE_CATALOG", "CATALOG::DENY_USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of("METALAKE::DENY_USE_CATALOG", "CATALOG::USE_CATALOG")));
   }
 
   @Test

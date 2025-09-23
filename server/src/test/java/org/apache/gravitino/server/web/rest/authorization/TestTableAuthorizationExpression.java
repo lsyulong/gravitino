@@ -27,6 +27,7 @@ import ognl.OgnlException;
 import org.apache.gravitino.dto.requests.TableCreateRequest;
 import org.apache.gravitino.dto.requests.TableUpdatesRequest;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
+import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
 import org.apache.gravitino.server.web.rest.TableOperations;
 import org.junit.jupiter.api.Test;
 
@@ -62,12 +63,26 @@ public class TestTableAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "METALAKE::CREATE_TABLE", "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::CREATE_TABLE",
+                "CATALOG::DENY_CREATE_TABLE",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::DENY_CREATE_TABLE",
+                "CATALOG::CREATE_TABLE",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
   }
 
   @Test
   public void testListTable() throws IllegalAccessException, OgnlException, NoSuchFieldException {
     Field loadTableAuthorizationExpressionField =
-        TableOperations.class.getDeclaredField("loadTableAuthorizationExpression");
+        AuthorizationExpressionConstants.class.getDeclaredField("loadTableAuthorizationExpression");
     loadTableAuthorizationExpressionField.setAccessible(true);
     String loadTableAuthExpression = (String) loadTableAuthorizationExpressionField.get(null);
     MockAuthorizationExpressionEvaluator mockEvaluator =
@@ -98,6 +113,13 @@ public class TestTableAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "METALAKE::SELECT_TABLE", "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::SELECT_TABLE",
+                "CATALOG::DENY_SELECT_TABLE",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
   }
 
   @Test
@@ -136,6 +158,13 @@ public class TestTableAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "METALAKE::SELECT_TABLE", "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::SELECT_TABLE",
+                "CATALOG::DENY_SELECT_TABLE",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
   }
 
   @Test
@@ -192,6 +221,16 @@ public class TestTableAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "METALAKE::MODIFY_TABLE", "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::MODIFY_TABLE", "CATALOG::DENY_MODIFY_TABLE",
+                "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::DENY_MODIFY_TABLE", "CATALOG::MODIFY_TABLE",
+                "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
   }
 
   @Test
@@ -248,5 +287,19 @@ public class TestTableAuthorizationExpression {
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("TABLE::OWNER", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "TABLE::OWNER",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::DENY_USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "TABLE::OWNER",
+                "SCHEMA::DENY_USE_SCHEMA",
+                "CATALOG::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
   }
 }

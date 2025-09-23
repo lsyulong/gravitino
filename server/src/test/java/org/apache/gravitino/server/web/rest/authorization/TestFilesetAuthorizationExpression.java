@@ -27,6 +27,7 @@ import ognl.OgnlException;
 import org.apache.gravitino.dto.requests.FilesetCreateRequest;
 import org.apache.gravitino.dto.requests.FilesetUpdatesRequest;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
+import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
 import org.apache.gravitino.server.web.rest.FilesetOperations;
 import org.junit.jupiter.api.Test;
 
@@ -57,12 +58,31 @@ public class TestFilesetAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "SCHEMA::CREATE_FILESET", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::DENY_CREATE_FILESET", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::DENY_CREATE_FILESET",
+                "CATALOG::CREATE_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::CREATE_FILESET",
+                "CATALOG::DENY_CREATE_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
   }
 
   @Test
   public void testLoadFileset() throws OgnlException, NoSuchFieldException, IllegalAccessException {
     Field loadFilesetAuthorizationExpressionField =
-        FilesetOperations.class.getDeclaredField("loadFilesetAuthorizationExpression");
+        AuthorizationExpressionConstants.class.getDeclaredField(
+            "loadFilesetAuthorizationExpression");
     loadFilesetAuthorizationExpressionField.setAccessible(true);
     String loadFilesetAuthorizationExpression =
         (String) loadFilesetAuthorizationExpressionField.get(null);
@@ -87,6 +107,20 @@ public class TestFilesetAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "SCHEMA::WRITE_FILESET", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::WRITE_FILESET",
+                "CATALOG::DENY_WRITE_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::DENY_WRITE_FILESET",
+                "CATALOG::WRITE_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
 
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("METALAKE::READ_FILESET")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("CATALOG::READ_FILESET")));
@@ -96,6 +130,20 @@ public class TestFilesetAuthorizationExpression {
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("SCHEMA::READ_FILESET", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::READ_FILESET",
+                "CATALOG::DENY_READ_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::DENY_READ_FILESET",
+                "CATALOG::READ_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
 
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
@@ -138,6 +186,20 @@ public class TestFilesetAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "SCHEMA::WRITE_FILESET", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::WRITE_FILESET",
+                "CATALOG::DENY_WRITE_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::DENY_WRITE_FILESET",
+                "CATALOG::WRITE_FILESET",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
 
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
@@ -179,6 +241,10 @@ public class TestFilesetAuthorizationExpression {
 
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER", "CATALOG::USE_CATALOG", "METALAKE::DENY_USE_CATALOG")));
     assertTrue(
         mockEvaluator.getResult(
             ImmutableSet.of("SCHEMA::OWNER", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));

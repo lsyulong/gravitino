@@ -18,8 +18,12 @@
  */
 package org.apache.gravitino.storage.relational.service;
 
+import static org.apache.gravitino.metrics.source.MetricsSource.GRAVITINO_RELATIONAL_STORE_METRIC_NAME;
+
 import com.google.common.base.Preconditions;
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Function;
@@ -31,14 +35,21 @@ import org.apache.gravitino.MetadataObject;
 import org.apache.gravitino.NameIdentifier;
 import org.apache.gravitino.Namespace;
 import org.apache.gravitino.exceptions.NoSuchEntityException;
+import org.apache.gravitino.meta.GenericEntity;
 import org.apache.gravitino.meta.PolicyEntity;
+import org.apache.gravitino.metrics.Monitored;
 import org.apache.gravitino.storage.relational.mapper.PolicyMetaMapper;
+import org.apache.gravitino.storage.relational.mapper.PolicyMetadataObjectRelMapper;
 import org.apache.gravitino.storage.relational.mapper.PolicyVersionMapper;
 import org.apache.gravitino.storage.relational.po.PolicyMaxVersionPO;
+import org.apache.gravitino.storage.relational.po.PolicyMetadataObjectRelPO;
 import org.apache.gravitino.storage.relational.po.PolicyPO;
 import org.apache.gravitino.storage.relational.utils.ExceptionUtils;
 import org.apache.gravitino.storage.relational.utils.POConverters;
 import org.apache.gravitino.storage.relational.utils.SessionUtils;
+import org.apache.gravitino.utils.MetadataObjectUtil;
+import org.apache.gravitino.utils.NameIdentifierUtil;
+import org.apache.gravitino.utils.NamespaceUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,6 +63,9 @@ public class PolicyMetaService {
 
   private PolicyMetaService() {}
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "listPoliciesByNamespace")
   public List<PolicyEntity> listPoliciesByNamespace(Namespace namespace) {
     String metalakeName = namespace.level(0);
     List<PolicyPO> policyPOs =
@@ -62,12 +76,18 @@ public class PolicyMetaService {
         .collect(Collectors.toList());
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getPolicyByIdentifier")
   public PolicyEntity getPolicyByIdentifier(NameIdentifier ident) {
     String metalakeName = ident.namespace().level(0);
     PolicyPO policyPO = getPolicyPOByMetalakeAndName(metalakeName, ident.name());
     return POConverters.fromPolicyPO(policyPO, ident.namespace());
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "insertPolicy")
   public void insertPolicy(PolicyEntity policyEntity, boolean overwritten) throws IOException {
     Namespace ns = policyEntity.namespace();
     String metalakeName = ns.level(0);
@@ -106,6 +126,9 @@ public class PolicyMetaService {
     }
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "updatePolicy")
   public <E extends Entity & HasIdentifier> PolicyEntity updatePolicy(
       NameIdentifier ident, Function<E, E> updater) throws IOException {
     String metalakeName = ident.namespace().level(0);
@@ -158,6 +181,9 @@ public class PolicyMetaService {
     }
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deletePolicy")
   public boolean deletePolicy(NameIdentifier ident) {
     String metalakeName = ident.namespace().level(0);
     int[] policyMetaDeletedCount = new int[] {0};
@@ -167,13 +193,13 @@ public class PolicyMetaService {
     SessionUtils.doMultipleWithCommit(
         () ->
             policyMetaDeletedCount[0] =
-                SessionUtils.doWithoutCommitAndFetchResult(
+                SessionUtils.getWithoutCommit(
                     PolicyMetaMapper.class,
                     mapper ->
                         mapper.softDeletePolicyByMetalakeAndPolicyName(metalakeName, ident.name())),
         () ->
             policyVersionDeletedCount[0] =
-                SessionUtils.doWithoutCommitAndFetchResult(
+                SessionUtils.getWithoutCommit(
                     PolicyVersionMapper.class,
                     mapper ->
                         mapper.softDeletePolicyVersionByMetalakeAndPolicyName(
@@ -181,36 +207,198 @@ public class PolicyMetaService {
     return policyMetaDeletedCount[0] + policyVersionDeletedCount[0] > 0;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "listPoliciesForMetadataObject")
   public List<PolicyEntity> listPoliciesForMetadataObject(
-      NameIdentifier objectIdent, MetadataObject.Type objectType)
+      NameIdentifier objectIdent, Entity.EntityType objectType)
       throws NoSuchEntityException, IOException {
-    // todo: implement this method
-    throw new UnsupportedOperationException("Not implemented yet");
+    MetadataObject metadataObject = NameIdentifierUtil.toMetadataObject(objectIdent, objectType);
+    String metalake = objectIdent.namespace().level(0);
+
+    List<PolicyPO> PolicyPOs;
+    try {
+      Long metalakeId = MetalakeMetaService.getInstance().getMetalakeIdByName(metalake);
+      Long metadataObjectId =
+          MetadataObjectService.getMetadataObjectId(
+              metalakeId, metadataObject.fullName(), metadataObject.type());
+
+      PolicyPOs =
+          SessionUtils.getWithoutCommit(
+              PolicyMetadataObjectRelMapper.class,
+              mapper ->
+                  mapper.listPolicyPOsByMetadataObjectIdAndType(
+                      metadataObjectId, metadataObject.type().toString()));
+    } catch (RuntimeException e) {
+      ExceptionUtils.checkSQLException(e, Entity.EntityType.POLICY, objectIdent.toString());
+      throw e;
+    }
+
+    return PolicyPOs.stream()
+        .map(PolicyPO -> POConverters.fromPolicyPO(PolicyPO, NamespaceUtil.ofPolicy(metalake)))
+        .collect(Collectors.toList());
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getPolicyForMetadataObject")
   public PolicyEntity getPolicyForMetadataObject(
-      NameIdentifier objectIdent, MetadataObject.Type objectType, NameIdentifier policyIdent)
+      NameIdentifier objectIdent, Entity.EntityType objectType, NameIdentifier policyIdent)
       throws NoSuchEntityException, IOException {
-    // todo: implement this method
-    throw new UnsupportedOperationException("Not implemented yet");
+    MetadataObject metadataObject = NameIdentifierUtil.toMetadataObject(objectIdent, objectType);
+    String metalake = objectIdent.namespace().level(0);
+
+    PolicyPO policyPO;
+    try {
+      Long metalakeId = MetalakeMetaService.getInstance().getMetalakeIdByName(metalake);
+      Long metadataObjectId =
+          MetadataObjectService.getMetadataObjectId(
+              metalakeId, metadataObject.fullName(), metadataObject.type());
+
+      policyPO =
+          SessionUtils.getWithoutCommit(
+              PolicyMetadataObjectRelMapper.class,
+              mapper ->
+                  mapper.getPolicyPOsByMetadataObjectAndPolicyName(
+                      metadataObjectId, metadataObject.type().toString(), policyIdent.name()));
+    } catch (RuntimeException e) {
+      ExceptionUtils.checkSQLException(e, Entity.EntityType.POLICY, policyIdent.toString());
+      throw e;
+    }
+
+    if (policyPO == null) {
+      throw new NoSuchEntityException(
+          NoSuchEntityException.NO_SUCH_ENTITY_MESSAGE,
+          Entity.EntityType.POLICY.name().toLowerCase(),
+          policyIdent.name());
+    }
+
+    return POConverters.fromPolicyPO(policyPO, NamespaceUtil.ofPolicy(metalake));
   }
 
-  public List<MetadataObject> listAssociatedMetadataObjectsForPolicy(NameIdentifier policyIdent)
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "listAssociatedEntitiesForPolicy")
+  public List<GenericEntity> listAssociatedEntitiesForPolicy(NameIdentifier policyIdent)
       throws IOException {
-    // todo: implement this method
-    throw new UnsupportedOperationException("Not implemented yet");
+    String metalakeName = policyIdent.namespace().level(0);
+    String policyName = policyIdent.name();
+
+    try {
+      List<PolicyMetadataObjectRelPO> policyMetadataObjectRelPOs =
+          SessionUtils.doWithCommitAndFetchResult(
+              PolicyMetadataObjectRelMapper.class,
+              mapper ->
+                  mapper.listPolicyMetadataObjectRelsByMetalakeAndPolicyName(
+                      metalakeName, policyName));
+
+      return policyMetadataObjectRelPOs.stream()
+          .map(
+              r ->
+                  GenericEntity.builder()
+                      .withId(r.getMetadataObjectId())
+                      .withEntityType(
+                          MetadataObjectUtil.toEntityType(
+                              MetadataObject.Type.valueOf(r.getMetadataObjectType())))
+                      .build())
+          .collect(Collectors.toList());
+
+    } catch (RuntimeException e) {
+      ExceptionUtils.checkSQLException(e, Entity.EntityType.POLICY, policyIdent.toString());
+      throw e;
+    }
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "associatePoliciesWithMetadataObject")
   public List<PolicyEntity> associatePoliciesWithMetadataObject(
       NameIdentifier objectIdent,
-      MetadataObject.Type objectType,
+      Entity.EntityType objectType,
       NameIdentifier[] policiesToAdd,
       NameIdentifier[] policiesToRemove)
       throws NoSuchEntityException, EntityAlreadyExistsException, IOException {
-    // todo: implement this method
-    throw new UnsupportedOperationException("Not implemented yet");
+    MetadataObject metadataObject = NameIdentifierUtil.toMetadataObject(objectIdent, objectType);
+    String metalake = objectIdent.namespace().level(0);
+
+    try {
+      Long metalakeId = MetalakeMetaService.getInstance().getMetalakeIdByName(metalake);
+      Long metadataObjectId =
+          MetadataObjectService.getMetadataObjectId(
+              metalakeId, metadataObject.fullName(), metadataObject.type());
+
+      // Fetch all the policies need to associate with the metadata object.
+      List<String> policyNamesToAdd =
+          Arrays.stream(policiesToAdd).map(NameIdentifier::name).collect(Collectors.toList());
+      List<PolicyPO> policyPOsToAdd =
+          policyNamesToAdd.isEmpty()
+              ? Collections.emptyList()
+              : getPolicyPOsByMetalakeAndNames(metalake, policyNamesToAdd);
+
+      // Fetch all the policies need to remove from the metadata object.
+      List<String> policyNamesToRemove =
+          Arrays.stream(policiesToRemove).map(NameIdentifier::name).collect(Collectors.toList());
+      List<PolicyPO> policyPOsToRemove =
+          policyNamesToRemove.isEmpty()
+              ? Collections.emptyList()
+              : getPolicyPOsByMetalakeAndNames(metalake, policyNamesToRemove);
+
+      SessionUtils.doMultipleWithCommit(
+          () -> {
+            // Insert the policy metadata object relations.
+            if (policyPOsToAdd.isEmpty()) {
+              return;
+            }
+
+            List<PolicyMetadataObjectRelPO> policyRelsToAdd =
+                policyPOsToAdd.stream()
+                    .map(
+                        policyPO ->
+                            POConverters.initializePolicyMetadataObjectRelPOWithVersion(
+                                policyPO.getPolicyId(),
+                                metadataObjectId,
+                                metadataObject.type().toString()))
+                    .collect(Collectors.toList());
+            SessionUtils.doWithoutCommit(
+                PolicyMetadataObjectRelMapper.class,
+                mapper -> mapper.batchInsertPolicyMetadataObjectRels(policyRelsToAdd));
+          },
+          () -> {
+            // Remove the policy metadata object relations.
+            if (policyPOsToRemove.isEmpty()) {
+              return;
+            }
+
+            List<Long> policyIdsToRemove =
+                policyPOsToRemove.stream().map(PolicyPO::getPolicyId).collect(Collectors.toList());
+            SessionUtils.doWithoutCommit(
+                PolicyMetadataObjectRelMapper.class,
+                mapper ->
+                    mapper.batchDeletePolicyMetadataObjectRelsByPolicyIdsAndMetadataObject(
+                        metadataObjectId, metadataObject.type().toString(), policyIdsToRemove));
+          });
+
+      // Fetch all the policies associated with the metadata object after the operation.
+      List<PolicyPO> policyPOs =
+          SessionUtils.getWithoutCommit(
+              PolicyMetadataObjectRelMapper.class,
+              mapper ->
+                  mapper.listPolicyPOsByMetadataObjectIdAndType(
+                      metadataObjectId, metadataObject.type().toString()));
+
+      return policyPOs.stream()
+          .map(policyPO -> POConverters.fromPolicyPO(policyPO, NamespaceUtil.ofPolicy(metalake)))
+          .collect(Collectors.toList());
+
+    } catch (RuntimeException e) {
+      ExceptionUtils.checkSQLException(e, Entity.EntityType.POLICY, objectIdent.toString());
+      throw e;
+    }
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deletePolicyAndVersionMetasByLegacyTimeline")
   public int deletePolicyAndVersionMetasByLegacyTimeline(Long legacyTimeline, int limit) {
     int policyDeletedCount =
         SessionUtils.doWithCommitAndFetchResult(
@@ -225,6 +413,9 @@ public class PolicyMetaService {
     return policyDeletedCount + policyVersionDeletedCount;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deletePolicyVersionsByRetentionCount")
   public int deletePolicyVersionsByRetentionCount(Long versionRetentionCount, int limit) {
     // get the current version of all policies.
     List<PolicyMaxVersionPO> policyMaxVersions =
@@ -261,7 +452,7 @@ public class PolicyMetaService {
     PolicyPO policyPO =
         SessionUtils.getWithoutCommit(
             PolicyMetaMapper.class,
-            mapper -> mapper.selectTagMetaByMetalakeAndName(metalakeName, policyName));
+            mapper -> mapper.selectPolicyMetaByMetalakeAndName(metalakeName, policyName));
 
     if (policyPO == null) {
       throw new NoSuchEntityException(
@@ -270,5 +461,12 @@ public class PolicyMetaService {
           policyName);
     }
     return policyPO;
+  }
+
+  private List<PolicyPO> getPolicyPOsByMetalakeAndNames(
+      String metalakeName, List<String> policyNames) {
+    return SessionUtils.getWithoutCommit(
+        PolicyMetaMapper.class,
+        mapper -> mapper.listPolicyPOsByMetalakeAndPolicyNames(metalakeName, policyNames));
   }
 }

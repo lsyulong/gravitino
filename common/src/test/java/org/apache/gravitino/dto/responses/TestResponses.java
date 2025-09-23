@@ -21,7 +21,7 @@ package org.apache.gravitino.dto.responses;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -30,6 +30,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
 import java.time.Instant;
 import java.util.Map;
+import java.util.Optional;
 import org.apache.gravitino.Catalog;
 import org.apache.gravitino.NameIdentifier;
 import org.apache.gravitino.authorization.Privileges;
@@ -48,6 +49,8 @@ import org.apache.gravitino.dto.model.ModelVersionDTO;
 import org.apache.gravitino.dto.rel.ColumnDTO;
 import org.apache.gravitino.dto.rel.TableDTO;
 import org.apache.gravitino.dto.rel.partitioning.Partitioning;
+import org.apache.gravitino.dto.stats.PartitionStatisticsDTO;
+import org.apache.gravitino.dto.stats.StatisticDTO;
 import org.apache.gravitino.dto.tag.TagDTO;
 import org.apache.gravitino.dto.util.DTOConverters;
 import org.apache.gravitino.json.JsonUtils;
@@ -77,7 +80,7 @@ public class TestResponses {
   void testDropped() throws IllegalArgumentException {
     DropResponse drop = new DropResponse();
 
-    assertFalse(drop.dropped());
+    assertNull(drop.dropped());
   }
 
   @Test
@@ -457,7 +460,7 @@ public class TestResponses {
             .withVersion(0)
             .withComment("model version1 comment")
             .withAliases(new String[] {"alias1", "alias2"})
-            .withUri("uri")
+            .withUris(ImmutableMap.of("n1", "u1"))
             .withProperties(ImmutableMap.of("key", "value"))
             .withAudit(
                 AuditDTO.builder().withCreator("user1").withCreateTime(Instant.now()).build())
@@ -467,7 +470,7 @@ public class TestResponses {
             .withVersion(1)
             .withComment("model version2 comment")
             .withAliases(new String[] {"alias3", "alias4"})
-            .withUri("uri")
+            .withUris(ImmutableMap.of("n2", "u2"))
             .withProperties(ImmutableMap.of("key", "value"))
             .withAudit(
                 AuditDTO.builder().withCreator("user1").withCreateTime(Instant.now()).build())
@@ -494,7 +497,7 @@ public class TestResponses {
             .withVersion(0)
             .withComment("model version comment")
             .withAliases(new String[] {"alias1", "alias2"})
-            .withUri("uri")
+            .withUris(ImmutableMap.of("n1", "u1"))
             .withProperties(props)
             .withAudit(audit)
             .build();
@@ -509,5 +512,20 @@ public class TestResponses {
 
     ModelVersionResponse response1 = new ModelVersionResponse();
     assertThrows(IllegalArgumentException.class, response1::validate);
+  }
+
+  @Test
+  void testPartitionStatisticsListResponseNullElement() {
+    AuditDTO audit = AuditDTO.builder().withCreator("user1").withCreateTime(Instant.now()).build();
+    StatisticDTO statistic =
+        StatisticDTO.builder()
+            .withName("stat")
+            .withAudit(audit)
+            .withValue(Optional.empty())
+            .build();
+    PartitionStatisticsDTO valid = PartitionStatisticsDTO.of("p1", new StatisticDTO[] {statistic});
+    PartitionStatisticsDTO[] stats = new PartitionStatisticsDTO[] {valid, null};
+    PartitionStatisticsListResponse response = new PartitionStatisticsListResponse(stats);
+    assertThrows(IllegalArgumentException.class, response::validate);
   }
 }

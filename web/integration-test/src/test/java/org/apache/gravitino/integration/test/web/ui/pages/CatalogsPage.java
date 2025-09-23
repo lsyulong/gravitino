@@ -30,6 +30,7 @@ import org.apache.gravitino.integration.test.web.ui.utils.BaseWebIT;
 import org.openqa.selenium.By;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.Keys;
+import org.openqa.selenium.StaleElementReferenceException;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.WebElement;
 import org.openqa.selenium.support.FindBy;
@@ -133,6 +134,12 @@ public class CatalogsPage extends BaseWebIT {
 
   @FindBy(xpath = "//div[@data-refer='tab-details-panel']")
   public WebElement tabDetailsContent;
+
+  @FindBy(xpath = "//button[@data-refer='tab-files']")
+  public WebElement tabFilesBtn;
+
+  @FindBy(xpath = "//div[@data-refer='tab-files-panel']")
+  public WebElement tabFilesContent;
 
   @FindBy(xpath = "//div[@data-refer='details-drawer']")
   public WebElement detailsDrawer;
@@ -574,6 +581,16 @@ public class CatalogsPage extends BaseWebIT {
     }
   }
 
+  public boolean verifyShowFilesContent() {
+    try {
+      String files = tabFilesContent.getAttribute("hidden");
+      return Objects.equals(files, null);
+    } catch (Exception e) {
+      LOG.error(e.getMessage(), e);
+      return false;
+    }
+  }
+
   public boolean verifyShowCatalogDetails(String name, String hiveMetastoreUris)
       throws InterruptedException {
     try {
@@ -721,19 +738,34 @@ public class CatalogsPage extends BaseWebIT {
     if (isColumnLevel) {
       xpath = xpath + "//p";
     }
-    List<WebElement> list =
-        wait.until(ExpectedConditions.visibilityOfAllElementsLocatedBy(By.xpath(xpath)));
-    List<String> texts = new ArrayList<>();
-    for (WebElement element : list) {
-      texts.add(element.getText());
-    }
 
-    if (!texts.contains(itemName)) {
-      LOG.error("table list: {} does not include itemName: {}", texts, itemName);
+    try {
+      List<WebElement> list =
+          wait.until(ExpectedConditions.visibilityOfAllElementsLocatedBy(By.xpath(xpath)));
+      List<String> texts = new ArrayList<>();
+
+      for (int i = 0; i < list.size(); i++) {
+        try {
+          texts.add(list.get(i).getText());
+        } catch (StaleElementReferenceException e) {
+          // Element failed, re-find and obtain text
+          List<WebElement> refreshedList = driver.findElements(By.xpath(xpath));
+          if (i < refreshedList.size()) {
+            texts.add(refreshedList.get(i).getText());
+          }
+        }
+      }
+
+      if (!texts.contains(itemName)) {
+        LOG.error("table list: {} does not include itemName: {}", texts, itemName);
+      }
+
+      return texts.contains(itemName);
+    } catch (StaleElementReferenceException e) {
+      // The entire lookup process failed, return false to let the outer layer retry.
+      LOG.warn("Elements became stale during verification, will retry", e);
       return false;
     }
-
-    return true;
   }
 
   public boolean verifyNoDataItemInList(String itemName, Boolean isColumnLevel) {
@@ -768,7 +800,8 @@ public class CatalogsPage extends BaseWebIT {
 
   public boolean verifyTableColumns() {
     try {
-      List<String> columns = Arrays.asList("Name", "Type", "Nullable", "AutoIncrement", "Comment");
+      List<String> columns =
+          Arrays.asList("Name", "Type", "Nullable", "AutoIncrement", "Default Value", "Comment");
 
       List<WebElement> columnHeadersRows =
           columnHeaders.findElements(By.xpath("./div[@role='columnheader']"));

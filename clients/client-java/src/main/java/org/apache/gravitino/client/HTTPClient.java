@@ -33,6 +33,8 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.gravitino.Version;
 import org.apache.gravitino.auth.AuthConstants;
 import org.apache.gravitino.dto.responses.ErrorResponse;
 import org.apache.gravitino.exceptions.RESTException;
@@ -204,7 +206,6 @@ public class HTTPClient implements RESTClient {
   private void throwFailure(
       CloseableHttpResponse response, String responseBody, Consumer<ErrorResponse> errorHandler) {
     ErrorResponse errorResponse = null;
-
     if (responseBody != null) {
       try {
         if (errorHandler instanceof ErrorHandler) {
@@ -233,7 +234,6 @@ public class HTTPClient implements RESTClient {
     }
 
     errorHandler.accept(errorResponse);
-
     // Throw an exception in case the provided error handler does not throw.
     throw new RESTException("Unhandled error: %s", errorResponse);
   }
@@ -682,7 +682,14 @@ public class HTTPClient implements RESTClient {
     // Some systems require the Content-Type header to be set even for empty-bodied requests to
     // avoid failures.
     request.setHeader(HttpHeaders.CONTENT_TYPE, bodyMimeType);
+    // Set the API version header
     request.setHeader(HttpHeaders.ACCEPT, VERSION_HEADER);
+
+    // Set the client version header
+    if (StringUtils.isNotBlank(Version.getCurrentVersion().version)) {
+      request.setHeader(Version.CLIENT_VERSION_HEADER, Version.getCurrentVersion().version);
+    }
+
     if (requestHeaders != null) {
       requestHeaders.forEach(request::setHeader);
     }

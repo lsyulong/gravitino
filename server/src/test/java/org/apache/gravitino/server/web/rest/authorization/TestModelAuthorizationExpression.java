@@ -29,6 +29,7 @@ import org.apache.gravitino.dto.requests.ModelUpdatesRequest;
 import org.apache.gravitino.dto.requests.ModelVersionLinkRequest;
 import org.apache.gravitino.dto.requests.ModelVersionUpdatesRequest;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
+import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
 import org.apache.gravitino.server.web.rest.ModelOperations;
 import org.junit.jupiter.api.Test;
 
@@ -64,12 +65,26 @@ public class TestModelAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "METALAKE::CREATE_MODEL", "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::CREATE_MODEL",
+                "CATALOG::DENY_CREATE_MODEL",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::DENY_CREATE_MODEL",
+                "CATALOG::CREATE_MODEL",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
   }
 
   @Test
   public void testLoadModel() throws OgnlException, NoSuchFieldException, IllegalAccessException {
     Field loadModelAuthorizationExpressionField =
-        ModelOperations.class.getDeclaredField("loadModelAuthorizationExpression");
+        AuthorizationExpressionConstants.class.getDeclaredField("loadModelAuthorizationExpression");
     loadModelAuthorizationExpressionField.setAccessible(true);
     String loadModelAuthExpression = (String) loadModelAuthorizationExpressionField.get(null);
     MockAuthorizationExpressionEvaluator mockEvaluator =
@@ -99,6 +114,27 @@ public class TestModelAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "METALAKE::USE_MODEL", "METALAKE::USE_SCHEMA", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::USE_MODEL",
+                "CATALOG::DENY_USE_MODEL",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::USE_MODEL",
+                "CATALOG::DENY_USE_SCHEMA",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::DENY_USE_MODEL",
+                "CATALOG::USE_MODEL",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
   }
 
   @Test
@@ -141,6 +177,14 @@ public class TestModelAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "MODEL::OWNER", "MODEL::USE_MODEL", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "MODEL::OWNER",
+                "MODEL::USE_MODEL",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::DENY_USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
   }
 
   @Test
@@ -178,6 +222,14 @@ public class TestModelAuthorizationExpression {
         mockEvaluator.getResult(
             ImmutableSet.of(
                 "MODEL::OWNER", "MODEL::USE_MODEL", "SCHEMA::USE_SCHEMA", "CATALOG::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "MODEL::OWNER",
+                "MODEL::USE_MODEL",
+                "SCHEMA::USE_SCHEMA",
+                "CATALOG::DENY_USE_SCHEMA",
+                "CATALOG::USE_CATALOG")));
   }
 
   @Test
@@ -238,6 +290,22 @@ public class TestModelAuthorizationExpression {
                 "MODEL::USE_MODEL",
                 "METALAKE::USE_SCHEMA",
                 "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::CREATE_MODEL_VERSION",
+                "CATALOG::DENY_CREATE_MODEL_VERSION",
+                "MODEL::USE_MODEL",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "METALAKE::DENY_CREATE_MODEL_VERSION",
+                "CATALOG::CREATE_MODEL_VERSION",
+                "MODEL::USE_MODEL",
+                "METALAKE::USE_SCHEMA",
+                "METALAKE::USE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("MODEL::OWNER", "CATALOG::USE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("MODEL::OWNER", "SCHEMA::USE_SCHEMA")));
     assertTrue(
@@ -285,6 +353,10 @@ public class TestModelAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER", "METALAKE::USE_CATALOG", "CATALOG::DENY_USE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL")));
     assertFalse(
         mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL", "SCHEMA::USE_SCHEMA")));
@@ -328,6 +400,10 @@ public class TestModelAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER", "METALAKE::USE_CATALOG", "CATALOG::DENY_USE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL")));
     assertFalse(
         mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL", "SCHEMA::USE_SCHEMA")));
@@ -370,6 +446,10 @@ public class TestModelAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER", "METALAKE::USE_CATALOG", "CATALOG::DENY_USE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL")));
     assertFalse(
         mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL", "SCHEMA::USE_SCHEMA")));
@@ -412,6 +492,10 @@ public class TestModelAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "CATALOG::USE_CATALOG")));
     assertTrue(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::OWNER", "METALAKE::USE_CATALOG")));
+    assertFalse(
+        mockEvaluator.getResult(
+            ImmutableSet.of(
+                "SCHEMA::OWNER", "METALAKE::USE_CATALOG", "CATALOG::DENY_USE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL")));
     assertFalse(
         mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_MODEL", "SCHEMA::USE_SCHEMA")));

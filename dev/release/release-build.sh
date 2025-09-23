@@ -170,7 +170,7 @@ if [ -z "$GRAVITINO_VERSION" ]; then
   GRAVITINO_VERSION=$(cat gradle.properties | parse_version)
 fi
 
-if [ -z "$PYGRAVITINO_VERSION"]; then
+if [ -z "$PYGRAVITINO_VERSION" ]; then
   PYGRAVITINO_VERSION=$(cat clients/client-python/setup.py | grep "version=" | awk -F"\"" '{print $2}')
 fi
 
@@ -336,8 +336,8 @@ if [[ "$1" == "publish-release" ]]; then
   cd ..
 
   $GRADLE clean
-  $GRADLE build -x test -PdefaultScalaVersion=2.12
-  $GRADLE build -x test -PdefaultScalaVersion=2.13
+  $GRADLE release -x test -PdefaultScalaVersion=2.12
+  $GRADLE release -x test -PdefaultScalaVersion=2.13
 
   $GRADLE -Dmaven.repo.local=$tmp_repo publishToMavenLocal -PdefaultScalaVersion=2.12
   $GRADLE -Dmaven.repo.local=$tmp_repo publishToMavenLocal -PdefaultScalaVersion=2.13

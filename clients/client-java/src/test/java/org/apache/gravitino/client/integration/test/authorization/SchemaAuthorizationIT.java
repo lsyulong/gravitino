@@ -38,6 +38,7 @@ import org.apache.gravitino.authorization.Privileges;
 import org.apache.gravitino.authorization.SecurableObject;
 import org.apache.gravitino.authorization.SecurableObjects;
 import org.apache.gravitino.client.GravitinoMetalake;
+import org.apache.gravitino.exceptions.ForbiddenException;
 import org.apache.gravitino.integration.test.container.ContainerSuite;
 import org.apache.gravitino.integration.test.container.HiveContainer;
 import org.junit.jupiter.api.BeforeAll;
@@ -79,6 +80,7 @@ public class SchemaAuthorizationIT extends BaseRestApiAuthorizationIT {
         () -> {
           normalUserClient.loadMetalake(METALAKE).loadCatalog(CATALOG);
         });
+
     // grant tester load catalog privilege
     List<SecurableObject> securableObjects = new ArrayList<>();
     GravitinoMetalake gravitinoMetalake = client.loadMetalake(METALAKE);
@@ -103,10 +105,11 @@ public class SchemaAuthorizationIT extends BaseRestApiAuthorizationIT {
         normalUserClient.loadMetalake(METALAKE).loadCatalog(CATALOG);
     assertThrows(
         "Can not access metadata {" + CATALOG + "}.",
-        RuntimeException.class,
+        ForbiddenException.class,
         () -> {
           catalogEntityLoadByTester2.asSchemas().createSchema("schema2", "test2", new HashMap<>());
         });
+
     GravitinoMetalake gravitinoMetalake = client.loadMetalake(METALAKE);
     // test grant create schema privilege
     gravitinoMetalake.grantPrivilegesToRole(
@@ -140,7 +143,7 @@ public class SchemaAuthorizationIT extends BaseRestApiAuthorizationIT {
     assertArrayEquals(new String[] {"schema2", "schema3"}, schemasLoadByTester2);
     assertThrows(
         String.format("Can not access metadata {%s.%s}.", CATALOG, "schema1"),
-        RuntimeException.class,
+        ForbiddenException.class,
         () -> {
           catalogEntityLoadByTester2.asSchemas().loadSchema("schema1");
         });
@@ -173,7 +176,7 @@ public class SchemaAuthorizationIT extends BaseRestApiAuthorizationIT {
         normalUserClient.loadMetalake(METALAKE).loadCatalog(CATALOG);
     assertThrows(
         String.format("Can not access metadata {%s.%s}.", CATALOG, "schema1"),
-        RuntimeException.class,
+        ForbiddenException.class,
         () -> {
           catalogEntityLoadByTester2
               .asSchemas()
@@ -205,7 +208,7 @@ public class SchemaAuthorizationIT extends BaseRestApiAuthorizationIT {
         normalUserClient.loadMetalake(METALAKE).loadCatalog(CATALOG);
     assertThrows(
         String.format("Can not access metadata {%s.%s}.", CATALOG, "schema1"),
-        RuntimeException.class,
+        ForbiddenException.class,
         () -> {
           catalogEntityLoadByTester2.asSchemas().dropSchema("schema1", true);
         });
@@ -221,7 +224,7 @@ public class SchemaAuthorizationIT extends BaseRestApiAuthorizationIT {
     // test catalog owner
     assertThrows(
         String.format("Can not access metadata {%s.%s}.", CATALOG, "schema1"),
-        RuntimeException.class,
+        ForbiddenException.class,
         () -> {
           catalogEntityLoadByTester2.asSchemas().dropSchema("schema1", true);
         });

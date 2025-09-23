@@ -17,7 +17,7 @@
 
 import unittest
 
-from gravitino.api.types.types import Types
+from gravitino.api.rel.types.types import Types
 from gravitino.dto.rel.expressions.field_reference_dto import FieldReferenceDTO
 from gravitino.dto.rel.expressions.function_arg import FunctionArg
 from gravitino.dto.rel.expressions.literal_dto import LiteralDTO
@@ -64,6 +64,6 @@ class TestFieldReferenceDTO(unittest.TestCase):
         self.assertIsInstance(dto, FieldReferenceDTO)
         self.assertEqual(dto.field_name(), ["field_name"])
 
-        dto = FieldReferenceDTO.builder().with_column_name(["field_name"]).build()
+        dto = FieldReferenceDTO.builder().with_column_name("field_name").build()
         self.assertIsInstance(dto, FieldReferenceDTO)
         self.assertEqual(dto.field_name(), ["field_name"])

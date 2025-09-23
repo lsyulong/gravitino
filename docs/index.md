@@ -65,8 +65,8 @@ You can use either to manage metadata. See
 
 Also, you can find the complete REST API definition in
 [Gravitino Open API](./api/rest/gravitino-rest-api),
-Java SDK definition in [Gravitino Java doc](pathname:///docs/1.0.0-SNAPSHOT/api/java/index.html),
-and Python SDK definition in [Gravitino Python doc](pathname:///docs/1.0.0-SNAPSHOT/api/python/index.html).
+Java SDK definition in [Gravitino Java doc](pathname:///docs/1.1.0-SNAPSHOT/api/java/index.html),
+and Python SDK definition in [Gravitino Python doc](pathname:///docs/1.1.0-SNAPSHOT/api/python/index.html).
 
 Gravitino also provides a web UI to manage the metadata. Visit the web UI in the browser via `http://<ip-address>:8090`.
 See [Gravitino web UI](./webui.md) for details.
@@ -85,6 +85,9 @@ Gravitino currently supports the following catalogs:
 * [**Paimon catalog**](./lakehouse-paimon-catalog.md)
 * [**PostgreSQL catalog**](./jdbc-postgresql-catalog.md)
 * [**OceanBase catalog**](./jdbc-oceanbase-catalog.md)
+* [**StarRocks catalog**](./jdbc-starrocks-catalog.md)
+
+If you want to operate table and partition statistics, you can refer to the [document](./manage-statistics-in-gravitino.md).
 
 **Fileset catalogs:**
 
@@ -120,6 +123,7 @@ complete environment. To experience all the features, see
 Gravitino supports different catalogs to manage the metadata in different sources. Please see:
 
 * [Doris catalog](./jdbc-doris-catalog.md): a complete guide to using Gravitino to manage Doris data.
+* [StarRocks catalog](./jdbc-starrocks-catalog.md): a complete guide to using Gravitino to manage StarRocks data.
 * [Fileset catalog](./fileset-catalog.md): a complete guide to using Gravitino to manage fileset
   using Hadoop Compatible File System (HCFS).
 * [Hive catalog](./apache-hive-catalog.md): a complete guide to using Gravitino to manage Apache Hive data.
@@ -138,6 +142,10 @@ Gravitino provides governance features to manage metadata in a unified way. See:
 
 * [Manage tags in Gravitino](./manage-tags-in-gravitino.md): a complete guide to using Gravitino
   to manage tags.
+* [Manage policies in Gravitino](./manage-policies-in-gravitino.md): a complete guide to using Gravitino
+  to manage policies.
+* [Manage jobs in Gravitino](./manage-jobs-in-gravitino.md): a complete guide to using Gravitino
+  to manage jobs.
 
 ### Gravitino Iceberg REST catalog service
 
@@ -181,11 +189,17 @@ Gravitino provides security configurations for Gravitino, including HTTPS, authe
 * [Access Control](./security/access-control.md): provides access control configurations.
 * [CORS](./security/how-to-use-cors.md): provides CORS configurations.
 
+### Gravitino MCP server
+
+Gravitino MCP server provides the ability to manage Gravitino metadata for AI tools.
+
+* [Gravitino MCP server](./gravitino-mcp-server.md): a complete guide to using the Gravitino MCP server.
+
 ### Programming guides
 
 * [Gravitino Open API](./api/rest/gravitino-rest-api): provides the complete Open API definition of Gravitino.
-* [Gravitino Java doc](pathname:///docs/1.0.0-SNAPSHOT/api/java/index.html): provides the Javadoc for the Gravitino API.
-* [Gravitino Python doc](pathname:///docs/1.0.0-SNAPSHOT/api/python/index.html): provides the Python doc for the Gravitino API.
+* [Gravitino Java doc](pathname:///docs/1.1.0-SNAPSHOT/api/java/index.html): provides the Javadoc for the Gravitino API.
+* [Gravitino Python doc](pathname:///docs/1.1.0-SNAPSHOT/api/python/index.html): provides the Python doc for the Gravitino API.
 
 ### Development guides
 

@@ -18,6 +18,8 @@
  */
 package org.apache.gravitino.storage.relational.service;
 
+import static org.apache.gravitino.metrics.source.MetricsSource.GRAVITINO_RELATIONAL_STORE_METRIC_NAME;
+
 import com.google.common.base.Preconditions;
 import java.io.IOException;
 import java.util.List;
@@ -34,6 +36,7 @@ import org.apache.gravitino.meta.FilesetEntity;
 import org.apache.gravitino.meta.ModelEntity;
 import org.apache.gravitino.meta.SchemaEntity;
 import org.apache.gravitino.meta.TableEntity;
+import org.apache.gravitino.metrics.Monitored;
 import org.apache.gravitino.storage.relational.helper.SchemaIds;
 import org.apache.gravitino.storage.relational.mapper.FilesetMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.FilesetVersionMapper;
@@ -41,8 +44,10 @@ import org.apache.gravitino.storage.relational.mapper.ModelMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.ModelVersionAliasRelMapper;
 import org.apache.gravitino.storage.relational.mapper.ModelVersionMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.OwnerMetaMapper;
+import org.apache.gravitino.storage.relational.mapper.PolicyMetadataObjectRelMapper;
 import org.apache.gravitino.storage.relational.mapper.SchemaMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.SecurableObjectMapper;
+import org.apache.gravitino.storage.relational.mapper.StatisticMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.TableColumnMapper;
 import org.apache.gravitino.storage.relational.mapper.TableMetaMapper;
 import org.apache.gravitino.storage.relational.mapper.TagMetadataObjectRelMapper;
@@ -64,6 +69,9 @@ public class SchemaMetaService {
 
   private SchemaMetaService() {}
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getSchemaPOByCatalogIdAndName")
   public SchemaPO getSchemaPOByCatalogIdAndName(Long catalogId, String schemaName) {
     SchemaPO schemaPO =
         SessionUtils.getWithoutCommit(
@@ -79,6 +87,9 @@ public class SchemaMetaService {
     return schemaPO;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getSchemaIdByMetalakeNameAndCatalogNameAndSchemaName")
   public SchemaIds getSchemaIdByMetalakeNameAndCatalogNameAndSchemaName(
       String metalakeName, String catalogName, String schemaName) {
     return SessionUtils.getWithoutCommit(
@@ -88,12 +99,9 @@ public class SchemaMetaService {
                 metalakeName, catalogName, schemaName));
   }
 
-  // Schema may be deleted, so the SchemaPO may be null.
-  public SchemaPO getSchemaPOById(Long schemaId) {
-    return SessionUtils.getWithoutCommit(
-        SchemaMetaMapper.class, mapper -> mapper.selectSchemaMetaById(schemaId));
-  }
-
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getSchemaIdByCatalogIdAndName")
   public Long getSchemaIdByCatalogIdAndName(Long catalogId, String schemaName) {
     Long schemaId =
         SessionUtils.getWithoutCommit(
@@ -109,6 +117,9 @@ public class SchemaMetaService {
     return schemaId;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "getSchemaByIdentifier")
   public SchemaEntity getSchemaByIdentifier(NameIdentifier identifier) {
     NameIdentifierUtil.checkSchema(identifier);
     String schemaName = identifier.name();
@@ -121,6 +132,9 @@ public class SchemaMetaService {
     return POConverters.fromSchemaPO(schemaPO, identifier.namespace());
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "listSchemasByNamespace")
   public List<SchemaEntity> listSchemasByNamespace(Namespace namespace) {
     NamespaceUtil.checkSchema(namespace);
 
@@ -132,6 +146,9 @@ public class SchemaMetaService {
     return POConverters.fromSchemaPOs(schemaPOs, namespace);
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "insertSchema")
   public void insertSchema(SchemaEntity schemaEntity, boolean overwrite) throws IOException {
     try {
       NameIdentifierUtil.checkSchema(schemaEntity.nameIdentifier());
@@ -156,6 +173,9 @@ public class SchemaMetaService {
     }
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "updateSchema")
   public <E extends Entity & HasIdentifier> SchemaEntity updateSchema(
       NameIdentifier identifier, Function<E, E> updater) throws IOException {
     NameIdentifierUtil.checkSchema(identifier);
@@ -195,6 +215,9 @@ public class SchemaMetaService {
     }
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deleteSchema")
   public boolean deleteSchema(NameIdentifier identifier, boolean cascade) {
     NameIdentifierUtil.checkSchema(identifier);
 
@@ -243,6 +266,10 @@ public class SchemaMetaService {
                     mapper -> mapper.softDeleteTagMetadataObjectRelsBySchemaId(schemaId)),
             () ->
                 SessionUtils.doWithoutCommit(
+                    PolicyMetadataObjectRelMapper.class,
+                    mapper -> mapper.softDeletePolicyMetadataObjectRelsBySchemaId(schemaId)),
+            () ->
+                SessionUtils.doWithoutCommit(
                     ModelVersionAliasRelMapper.class,
                     mapper -> mapper.softDeleteModelVersionAliasRelsBySchemaId(schemaId)),
             () ->
@@ -252,7 +279,11 @@ public class SchemaMetaService {
             () ->
                 SessionUtils.doWithoutCommit(
                     ModelMetaMapper.class,
-                    mapper -> mapper.softDeleteModelMetasBySchemaId(schemaId)));
+                    mapper -> mapper.softDeleteModelMetasBySchemaId(schemaId)),
+            () ->
+                SessionUtils.doWithoutCommit(
+                    StatisticMetaMapper.class,
+                    mapper -> mapper.softDeleteStatisticsBySchemaId(schemaId)));
       } else {
         List<TableEntity> tableEntities =
             TableMetaService.getInstance()
@@ -310,12 +341,25 @@ public class SchemaMetaService {
                     TagMetadataObjectRelMapper.class,
                     mapper ->
                         mapper.softDeleteTagMetadataObjectRelsByMetadataObject(
+                            schemaId, MetadataObject.Type.SCHEMA.name())),
+            () ->
+                SessionUtils.doWithoutCommit(
+                    StatisticMetaMapper.class,
+                    mapper -> mapper.softDeleteStatisticsByEntityId(schemaId)),
+            () ->
+                SessionUtils.doWithoutCommit(
+                    PolicyMetadataObjectRelMapper.class,
+                    mapper ->
+                        mapper.softDeletePolicyMetadataObjectRelsByMetadataObject(
                             schemaId, MetadataObject.Type.SCHEMA.name())));
       }
     }
     return true;
   }
 
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "deleteSchemaMetasByLegacyTimeline")
   public int deleteSchemaMetasByLegacyTimeline(Long legacyTimeline, int limit) {
     return SessionUtils.doWithCommitAndFetchResult(
         SchemaMetaMapper.class,
