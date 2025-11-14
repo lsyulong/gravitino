@@ -30,7 +30,7 @@ public class PolicyMetaPostgreSQLProvider extends PolicyMetaBaseSQLProvider {
     return "UPDATE "
         + POLICY_META_TABLE_NAME
         + " SET deleted_at = floor(extract(epoch from(current_timestamp -"
-        + " timestamp '1970-01-01 00:00:00'))*1000)"
+        + " timestamp '1970-01-01 00:00:00')) * 1000)"
         + " WHERE metalake_id = (SELECT metalake_id FROM "
         + " metalake_meta mm WHERE mm.metalake_name = #{metalakeName} AND mm.deleted_at = 0)"
         + " AND policy_name = #{policyName} AND deleted_at = 0";
@@ -41,7 +41,7 @@ public class PolicyMetaPostgreSQLProvider extends PolicyMetaBaseSQLProvider {
     return "UPDATE "
         + POLICY_META_TABLE_NAME
         + " SET deleted_at = floor(extract(epoch from(current_timestamp -"
-        + " timestamp '1970-01-01 00:00:00'))*1000)"
+        + " timestamp '1970-01-01 00:00:00')) * 1000)"
         + " WHERE metalake_id = #{metalakeId} AND deleted_at = 0";
   }
 
@@ -51,7 +51,7 @@ public class PolicyMetaPostgreSQLProvider extends PolicyMetaBaseSQLProvider {
         + POLICY_META_TABLE_NAME
         + " WHERE policy_id IN (SELECT policy_id FROM "
         + POLICY_META_TABLE_NAME
-        + " WHERE deleted_at = 0 AND legacy_timeline < #{legacyTimeline} LIMIT #{limit})";
+        + " WHERE deleted_at > 0 AND deleted_at < #{legacyTimeline} LIMIT #{limit})";
   }
 
   @Override

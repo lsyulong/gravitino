@@ -38,7 +38,7 @@ import org.apache.gravitino.meta.UserEntity;
  * efficiently store and retrieve relationships between entities based on their keys.
  */
 public class ReverseIndexCache {
-  private RadixTree<EntityCacheKey> reverseIndex;
+  private RadixTree<List<EntityCacheKey>> reverseIndex;
   /** Registers a reverse index processor for a specific entity class. */
   private final Map<Class<? extends Entity>, ReverseIndexRule> reverseIndexRules = new HashMap<>();
 
@@ -54,7 +54,7 @@ public class ReverseIndexCache {
     return reverseIndex.remove(key.toString());
   }
 
-  public Iterable<EntityCacheKey> getValuesForKeysStartingWith(String keyPrefix) {
+  public Iterable<List<EntityCacheKey>> getValuesForKeysStartingWith(String keyPrefix) {
     return reverseIndex.getValuesForKeysStartingWith(keyPrefix);
   }
 
@@ -73,12 +73,23 @@ public class ReverseIndexCache {
   public void put(
       NameIdentifier nameIdentifier, Entity.EntityType type, EntityCacheRelationKey key) {
     EntityCacheKey entityCacheKey = EntityCacheKey.of(nameIdentifier, type);
-    String strEntityCacheKey = entityCacheKey.toString();
-    List<EntityCacheKey> entityKeys =
-        Lists.newArrayList(reverseIndex.getValuesForKeysStartingWith(strEntityCacheKey));
-    String strEntityCacheKeySerialNumber =
-        String.format("%s-%d", strEntityCacheKey, entityKeys.size());
-    reverseIndex.put(strEntityCacheKeySerialNumber, key);
+    List<EntityCacheKey> existingKeys = reverseIndex.getValueForExactKey(entityCacheKey.toString());
+    if (existingKeys == null) {
+      reverseIndex.put(entityCacheKey.toString(), List.of(key));
+    } else {
+      if (existingKeys.contains(key)) {
+        return;
+      }
+
+      List<EntityCacheKey> newValues = Lists.newArrayList(existingKeys);
+      newValues.add(key);
+      reverseIndex.put(entityCacheKey.toString(), newValues);
+    }
+  }
+
+  public List<EntityCacheKey> get(NameIdentifier nameIdentifier, Entity.EntityType type) {
+    EntityCacheKey entityCacheKey = EntityCacheKey.of(nameIdentifier, type);
+    return reverseIndex.getValueForExactKey(entityCacheKey.toString());
   }
 
   public void put(Entity entity, EntityCacheRelationKey key) {
@@ -106,5 +117,17 @@ public class ReverseIndexCache {
   @FunctionalInterface
   interface ReverseIndexRule {
     void indexEntity(Entity entity, EntityCacheRelationKey key, ReverseIndexCache cache);
+  }
+
+  @Override
+  public String toString() {
+    Iterable<CharSequence> keys = reverseIndex.getKeysStartingWith("");
+    StringBuilder sb = new StringBuilder();
+    for (CharSequence key : keys) {
+      sb.append(key).append(" -> ").append(reverseIndex.getValueForExactKey(key.toString()));
+      sb.append("\n");
+    }
+
+    return sb.toString();
   }
 }

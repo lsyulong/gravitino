@@ -28,7 +28,7 @@ public class StatisticPostgresSQLProvider extends StatisticBaseSQLProvider {
   @Override
   protected String softDeleteSQL() {
     return " SET deleted_at = floor(extract(epoch from(current_timestamp -"
-        + " timestamp '1970-01-01 00:00:00'))*1000)";
+        + " timestamp '1970-01-01 00:00:00')) * 1000)";
   }
 
   @Override
@@ -58,5 +58,14 @@ public class StatisticPostgresSQLProvider extends StatisticBaseSQLProvider {
         + "  last_version = EXCLUDED.last_version,"
         + "  deleted_at = EXCLUDED.deleted_at"
         + "</script>";
+  }
+
+  @Override
+  public String deleteStatisticsByLegacyTimeline(Long legacyTimeline, int limit) {
+    return "DELETE FROM "
+        + STATISTIC_META_TABLE_NAME
+        + " WHERE statistic_id IN (SELECT statistic_id FROM "
+        + STATISTIC_META_TABLE_NAME
+        + " WHERE deleted_at > 0 AND deleted_at < #{legacyTimeline} LIMIT #{limit})";
   }
 }

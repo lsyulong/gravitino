@@ -168,6 +168,9 @@ public class CatalogOperations {
   @Path("testConnection")
   @Produces("application/vnd.gravitino.v1+json")
   @Timed(name = "test-connection." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
+  @AuthorizationExpression(
+      expression = "METALAKE::CREATE_CATALOG || METALAKE::OWNER",
+      accessMetadataType = MetadataObject.Type.METALAKE)
   @ResponseMetered(name = "test-connection", absolute = true)
   public Response testConnection(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -213,12 +216,15 @@ public class CatalogOperations {
           String catalogName,
       CatalogSetRequest request) {
     LOG.info("Received set request for catalog: {}.{}", metalake, catalogName);
+
+    OperationType op = request.isInUse() ? OperationType.ENABLE : OperationType.DISABLE;
+
     try {
       return Utils.doAs(
           httpRequest,
           () -> {
             NameIdentifier ident = NameIdentifierUtil.ofCatalog(metalake, catalogName);
-            if (request.isInUse()) {
+            if (op == OperationType.ENABLE) {
               catalogDispatcher.enableCatalog(ident);
             } else {
               catalogDispatcher.disableCatalog(ident);
@@ -239,8 +245,7 @@ public class CatalogOperations {
           request.isInUse() ? "enable" : "disable",
           metalake,
           catalogName);
-      return ExceptionHandlers.handleCatalogException(
-          OperationType.ENABLE, catalogName, metalake, e);
+      return ExceptionHandlers.handleCatalogException(op, catalogName, metalake, e);
     }
   }
 
