@@ -46,7 +46,7 @@ import org.apache.gravitino.dto.util.DTOConverters;
 import org.apache.gravitino.messaging.Topic;
 import org.apache.gravitino.messaging.TopicChange;
 import org.apache.gravitino.metrics.MetricNames;
-import org.apache.gravitino.server.authorization.MetadataFilterHelper;
+import org.apache.gravitino.server.authorization.MetadataAuthzHelper;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationMetadata;
 import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
@@ -74,7 +74,7 @@ public class TopicOperations {
   @Timed(name = "list-topic." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "list-topic", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadSchemaAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_SCHEMA_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.SCHEMA)
   public Response listTopics(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -91,9 +91,9 @@ public class TopicOperations {
             NameIdentifier[] topics = dispatcher.listTopics(topicNS);
             topics = topics == null ? new NameIdentifier[0] : topics;
             topics =
-                MetadataFilterHelper.filterByExpression(
+                MetadataAuthzHelper.filterByExpression(
                     metalake,
-                    AuthorizationExpressionConstants.filterTopicsAuthorizationExpression,
+                    AuthorizationExpressionConstants.FILTER_TOPICS_AUTHORIZATION_EXPRESSION,
                     Entity.EntityType.TOPIC,
                     topics);
             Response response = Utils.ok(new EntityListResponse(topics));
@@ -161,7 +161,7 @@ public class TopicOperations {
   @Timed(name = "load-topic." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "load-topic", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadTopicsAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_TOPICS_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.TOPIC)
   public Response loadTopic(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)

@@ -44,7 +44,6 @@ import org.apache.gravitino.flink.connector.store.GravitinoCatalogStoreFactoryOp
 import org.apache.gravitino.integration.test.container.ContainerSuite;
 import org.apache.gravitino.integration.test.container.HiveContainer;
 import org.apache.gravitino.integration.test.util.BaseIT;
-import org.apache.gravitino.server.web.JettyServerConfig;
 import org.apache.hadoop.fs.FileSystem;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -69,14 +68,15 @@ public abstract class FlinkEnvIT extends BaseIT {
 
   protected static FileSystem hdfs;
 
-  private static String gravitinoUri = "http://127.0.0.1:8090";
+  protected static String gravitinoUri = "http://localhost:8090";
 
   private final String lakeHouseIcebergProvider = "lakehouse-iceberg";
 
   protected String icebergRestServiceUri;
 
   @BeforeAll
-  void startUp() throws Exception {
+  @Override
+  public void startIntegrationTest() throws Exception {
     initHiveEnv();
     if (lakeHouseIcebergProvider.equalsIgnoreCase(getProvider())) {
       initIcebergRestServiceEnv();
@@ -92,12 +92,17 @@ public abstract class FlinkEnvIT extends BaseIT {
   }
 
   @AfterAll
-  void stop() throws Exception {
-    stopCatalogEnv();
-    stopFlinkEnv();
-    stopHdfsEnv();
-    super.stopIntegrationTest();
-    LOG.info("Stop Flink env successfully.");
+  @Override
+  public void stopIntegrationTest() {
+    try {
+      stopCatalogEnv();
+      stopFlinkEnv();
+      stopHdfsEnv();
+      super.stopIntegrationTest();
+      LOG.info("Stop Flink env successfully.");
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
   }
 
   protected void initCatalogEnv() throws Exception {}
@@ -112,7 +117,7 @@ public abstract class FlinkEnvIT extends BaseIT {
   protected abstract String getProvider();
 
   private void initIcebergRestServiceEnv() {
-    ignoreIcebergRestService = false;
+    super.ignoreIcebergAuxRestService = false;
     Map<String, String> icebergRestServiceConfigs = new HashMap<>();
     icebergRestServiceConfigs.put(
         "gravitino."
@@ -138,7 +143,7 @@ public abstract class FlinkEnvIT extends BaseIT {
   private void initGravitinoEnv() {
     // Gravitino server is already started by AbstractIT, just construct gravitinoUrl
     int gravitinoPort = getGravitinoServerPort();
-    gravitinoUri = String.format("http://127.0.0.1:%d", gravitinoPort);
+    gravitinoUri = String.format("http://localhost:%d", gravitinoPort);
     if (lakeHouseIcebergProvider.equalsIgnoreCase(getProvider())) {
       this.icebergRestServiceUri = getIcebergRestServiceUri();
     }
@@ -178,7 +183,7 @@ public abstract class FlinkEnvIT extends BaseIT {
     }
   }
 
-  private static void initFlinkEnv() {
+  protected void initFlinkEnv() {
     final Configuration configuration = new Configuration();
     configuration.setString(
         "table.catalog-store.kind", GravitinoCatalogStoreFactoryOptions.GRAVITINO);
@@ -226,8 +231,8 @@ public abstract class FlinkEnvIT extends BaseIT {
       Consumer<Catalog> action,
       boolean dropSchema,
       boolean cascade) {
-    Preconditions.checkNotNull(catalog);
-    Preconditions.checkNotNull(schemaName);
+    Preconditions.checkArgument(catalog != null, "Catalog cannot be null");
+    Preconditions.checkArgument(schemaName != null, "Schema name cannot be null");
     try {
       tableEnv.useCatalog(catalog.name());
       if (!catalog.asSchemas().schemaExists(schemaName)) {
@@ -248,7 +253,7 @@ public abstract class FlinkEnvIT extends BaseIT {
   }
 
   protected static void doWithCatalog(Catalog catalog, Consumer<Catalog> action) {
-    Preconditions.checkNotNull(catalog);
+    Preconditions.checkArgument(catalog != null, "Catalog cannot be null");
     tableEnv.useCatalog(catalog.name());
     action.accept(catalog);
   }
@@ -262,13 +267,5 @@ public abstract class FlinkEnvIT extends BaseIT {
       TableResult deleteResult = sql("DROP TABLE IF EXISTS %s", tableName);
       TestUtils.assertTableResult(deleteResult, ResultKind.SUCCESS);
     }
-  }
-
-  private String getIcebergRestServiceUri() {
-    JettyServerConfig jettyServerConfig =
-        JettyServerConfig.fromConfig(
-            serverConfig, String.format("gravitino.%s.", icebergRestServiceName));
-    return String.format(
-        "http://%s:%d/iceberg/", jettyServerConfig.getHost(), jettyServerConfig.getHttpPort());
   }
 }

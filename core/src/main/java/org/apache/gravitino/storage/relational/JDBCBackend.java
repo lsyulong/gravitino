@@ -101,7 +101,6 @@ public class JDBCBackend implements RelationalBackend {
   @Override
   public void initialize(Config config) {
     jdbcDatabase = startJDBCDatabaseIfNecessary(config);
-
     SqlSessionFactoryHelper.getInstance().init(config);
     SQLExceptionConverterFactory.initConverter(config);
   }
@@ -398,6 +397,7 @@ public class JDBCBackend implements RelationalBackend {
         return JobMetaService.getInstance()
             .deleteJobsByLegacyTimeline(legacyTimeline, GARBAGE_COLLECTOR_SINGLE_DELETION_LIMIT);
       case AUDIT:
+      case FUNCTION:
         return 0;
         // TODO: Implement hard delete logic for these entity types.
 
@@ -427,6 +427,7 @@ public class JDBCBackend implements RelationalBackend {
       case TABLE_STATISTIC:
       case JOB_TEMPLATE:
       case JOB:
+      case FUNCTION: // todo: remove once function versioning is supported
         // These entity types have not implemented multi-versions, so we can skip.
         return 0;
 

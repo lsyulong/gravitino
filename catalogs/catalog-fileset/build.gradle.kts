@@ -42,6 +42,7 @@ dependencies {
   }
   implementation(libs.awaitility)
   implementation(libs.caffeine)
+  implementation(libs.cglib)
   implementation(libs.commons.lang3)
   implementation(libs.commons.io)
   implementation(libs.hadoop3.client.api)
@@ -77,7 +78,7 @@ dependencies {
 }
 
 tasks {
-  val runtimeJars by registering(Copy::class) {
+  register("runtimeJars", Copy::class) {
     from(configurations.runtimeClasspath)
     into("build/libs")
   }

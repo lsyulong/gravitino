@@ -129,6 +129,36 @@ allprojects {
           "import\\s+(?:static\\s+)?[^*\\s]+\\*;(\\r\\n|\\r|\\n)",
           "$1"
         )
+        replaceRegex(
+          "Use Guava classes from collect/base packages instead of any shadowed versions (including Jersey)",
+          "import\\s+(?:.*\\.com\\.google\\.common\\.(collect|base)|org\\.glassfish\\.jersey\\.internal\\.guava)\\.([A-Z][a-zA-Z0-9_]*);",
+          "import com.google.common.${'$'}1.${'$'}2;"
+        )
+        replaceRegex(
+          "Use Guava classes from all other packages instead of any shadowed versions",
+          "import\\s+.*\\.com\\.google\\.common\\.(io|util\\.concurrent|annotations|cache|primitives|hash|net|reflect)\\.([A-Z][a-zA-Z0-9_]*);",
+          "import com.google.common.${'$'}1.${'$'}2;"
+        )
+        replaceRegex(
+          "Use Apache Commons Lang3 instead of shadowed versions",
+          "import\\s+.*\\.org\\.apache\\.commons\\.lang3\\.([A-Z][a-zA-Z0-9_]*);",
+          "import org.apache.commons.lang3.${'$'}1;"
+        )
+        replaceRegex(
+          "Use Apache Commons IO instead of shadowed versions",
+          "import\\s+.*\\.org\\.apache\\.commons\\.io\\.([A-Z][a-zA-Z0-9_]*);",
+          "import org.apache.commons.io.${'$'}1;"
+        )
+        replaceRegex(
+          "Use SLF4J Logger instead of other logging frameworks",
+          "import\\s+.*\\.(Logger|LoggerFactory);",
+          "import org.slf4j.${'$'}1;"
+        )
+        replaceRegex(
+          "Remove Testcontainers shading",
+          "import\\s+org\\.testcontainers\\.shaded\\.([^;]+);",
+          "import $1;"
+        )
 
         targetExclude("**/build/**", "**/.pnpm/***")
       }
@@ -209,8 +239,9 @@ allprojects {
         param.include("**/integration/test/**")
       }
 
+      val dockerTest = project.rootProject.extra["dockerTest"] as? Boolean ?: false
+      param.environment("dockerTest", dockerTest.toString())
       param.useJUnitPlatform {
-        val dockerTest = project.rootProject.extra["dockerTest"] as? Boolean ?: false
         if (!dockerTest) {
           excludeTags("gravitino-docker-test")
         }
@@ -272,6 +303,12 @@ subprojects {
     return@subprojects
   }
 
+  if (project.path == ":catalogs:hive-metastore2-libs" ||
+    project.path == ":catalogs:hive-metastore3-libs"
+  ) {
+    return@subprojects
+  }
+
   apply(plugin = "jacoco")
   apply(plugin = "maven-publish")
   apply(plugin = "java")
@@ -282,24 +319,26 @@ subprojects {
   }
 
   fun compatibleWithJDK8(project: Project): Boolean {
+    val name = project.name.lowercase()
+    val path = project.path.lowercase()
+    if (path.startsWith(":maintenance:jobs") ||
+      name == "api" ||
+      name == "common" ||
+      name == "catalog-common" ||
+      name == "hadoop-common"
+    ) {
+      return true
+    }
+
     val isReleaseRun = gradle.startParameter.taskNames.any { it == "release" || it == "publish" || it == "publishToMavenLocal" }
     if (!isReleaseRun) {
       return false
     }
 
-    val name = project.name.lowercase()
-    val path = project.path.lowercase()
-
     if (path.startsWith(":client") ||
       path.startsWith(":spark-connector") ||
       path.startsWith(":flink-connector") ||
       path.startsWith(":bundles")
-    ) {
-      return true
-    }
-
-    if (name == "api" || name == "common" ||
-      name == "catalog-common" || name == "hadoop-common"
     ) {
       return true
     }
@@ -476,7 +515,7 @@ subprojects {
   if (project.name in listOf("web", "docs")) {
     plugins.apply(NodePlugin::class)
     configure<NodeExtension> {
-      version.set("20.9.0")
+      version.set("20.19.0")
       pnpmVersion.set("9.x")
       nodeProjectDir.set(file("$rootDir/.node"))
       download.set(true)
@@ -681,8 +720,11 @@ tasks {
       "copySubprojectDependencies",
       "copySubprojectLib",
       "copyCliLib",
+      "copyJobsLib",
       ":authorizations:copyLibAndConfig",
       ":iceberg:iceberg-rest-server:copyLibAndConfigs",
+      ":lance:lance-rest-server:copyLibAndConfigs",
+      ":maintenance:optimizer:copyLibAndConfigs",
       ":web:web:build"
     )
 
@@ -761,12 +803,57 @@ tasks {
 
       copy {
         from(projectDir.dir("licenses")) { into("${rootProject.name}-iceberg-rest-server/licenses") }
-        from(projectDir.file("LICENSE.rest")) { into("${rootProject.name}-iceberg-rest-server") }
-        from(projectDir.file("NOTICE.rest")) { into("${rootProject.name}-iceberg-rest-server") }
+        from(projectDir.file("LICENSE.iceberg")) { into("${rootProject.name}-iceberg-rest-server") }
+        from(projectDir.file("NOTICE.iceberg")) { into("${rootProject.name}-iceberg-rest-server") }
         from(projectDir.file("README.md")) { into("${rootProject.name}-iceberg-rest-server") }
         into(outputDir)
         rename { fileName ->
-          fileName.replace(".rest", "")
+          fileName.replace(".iceberg", "")
+        }
+      }
+    }
+  }
+
+  val compileLanceRESTServer by registering {
+    dependsOn("lance:lance-rest-server:copyLibAndConfigsToStandalonePackage")
+    group = "gravitino distribution"
+    outputs.dir(projectDir.dir("distribution/${rootProject.name}-lance-rest-server"))
+    doLast {
+      copy {
+        from(projectDir.dir("conf")) {
+          include(
+            "${rootProject.name}-lance-rest-server.conf.template",
+            "${rootProject.name}-env.sh.template",
+            "log4j2.properties.template"
+          )
+          into("${rootProject.name}-lance-rest-server/conf")
+        }
+        from(projectDir.dir("bin")) {
+          include("common.sh.template", "${rootProject.name}-lance-rest-server.sh.template")
+          into("${rootProject.name}-lance-rest-server/bin")
+        }
+        into(outputDir)
+        rename { fileName ->
+          fileName.replace(".template", "")
+        }
+        eachFile {
+          if (name == "gravitino-env.sh") {
+            filter { line ->
+              line.replace("GRAVITINO_VERSION_PLACEHOLDER", "$version")
+            }
+          }
+        }
+        fileMode = 0b111101101
+      }
+
+      copy {
+        from(projectDir.dir("licenses")) { into("${rootProject.name}-lance-rest-server/licenses") }
+        from(projectDir.file("LICENSE.lance")) { into("${rootProject.name}-lance-rest-server") }
+        from(projectDir.file("NOTICE.lance")) { into("${rootProject.name}-lance-rest-server") }
+        from(projectDir.file("README.md")) { into("${rootProject.name}-lance-rest-server") }
+        into(outputDir)
+        rename { fileName ->
+          fileName.replace(".lance", "")
         }
       }
     }
@@ -791,7 +878,7 @@ tasks {
   }
 
   val assembleDistribution by registering(Tar::class) {
-    dependsOn("assembleTrinoConnector", "assembleIcebergRESTServer")
+    dependsOn("assembleTrinoConnector", "assembleIcebergRESTServer", "assembleLanceRESTServer")
     group = "gravitino distribution"
     finalizedBy("checksumDistribution")
     into("${rootProject.name}-$version-bin")
@@ -809,6 +896,17 @@ tasks {
     from(compileTrinoConnector.map { it.outputs.files.single() })
     compression = Compression.GZIP
     archiveFileName.set("${rootProject.name}-trino-connector-$version.tar.gz")
+    destinationDirectory.set(projectDir.dir("distribution"))
+  }
+
+  val assembleLanceRESTServer by registering(Tar::class) {
+    dependsOn("compileLanceRESTServer")
+    group = "gravitino distribution"
+    finalizedBy("checksumLanceRESTServerDistribution")
+    into("${rootProject.name}-lance-rest-server-$version-bin")
+    from(compileLanceRESTServer.map { it.outputs.files.single() })
+    compression = Compression.GZIP
+    archiveFileName.set("${rootProject.name}-lance-rest-server-$version-bin.tar.gz")
     destinationDirectory.set(projectDir.dir("distribution"))
   }
 
@@ -839,9 +937,25 @@ tasks {
     }
   }
 
+  register("checksumLanceRESTServerDistribution") {
+    group = "gravitino distribution"
+    dependsOn(assembleLanceRESTServer)
+    val archiveFile = assembleLanceRESTServer.flatMap { it.archiveFile }
+    val checksumFile = archiveFile.map { archive ->
+      archive.asFile.let { it.resolveSibling("${it.name}.sha256") }
+    }
+    inputs.file(archiveFile)
+    outputs.file(checksumFile)
+    doLast {
+      checksumFile.get().writeText(
+        serviceOf<ChecksumService>().sha256(archiveFile.get().asFile).toString()
+      )
+    }
+  }
+
   register("checksumDistribution") {
     group = "gravitino distribution"
-    dependsOn(assembleDistribution, "checksumTrinoConnector", "checksumIcebergRESTServerDistribution")
+    dependsOn(assembleDistribution, "checksumTrinoConnector", "checksumIcebergRESTServerDistribution", "checksumLanceRESTServerDistribution")
     val archiveFile = assembleDistribution.flatMap { it.archiveFile }
     val checksumFile = archiveFile.map { archive ->
       archive.asFile.let { it.resolveSibling("${it.name}.sha256") }
@@ -885,12 +999,15 @@ tasks {
         !it.name.startsWith("filesystem") &&
         !it.name.startsWith("flink") &&
         !it.name.startsWith("iceberg") &&
+        !it.name.startsWith("lance") &&
+        !it.name.startsWith("optimizer") &&
         !it.name.startsWith("spark") &&
+        !it.name.startsWith("hive-metastore") &&
         it.name != "hadoop-common" &&
-        it.name != "hive-metastore-common" &&
         it.name != "integration-test" &&
         it.name != "trino-connector" &&
         it.parent?.name != "bundles" &&
+        it.parent?.name != "maintenance" &&
         it.name != "mcp-server"
       ) {
         from(it.configurations.runtimeClasspath)
@@ -907,6 +1024,15 @@ tasks {
     setDuplicatesStrategy(DuplicatesStrategy.EXCLUDE)
   }
 
+  register("copyJobsLib", Copy::class) {
+    dependsOn(":maintenance:jobs:build")
+    from("maintenance/jobs/build/libs")
+    into("distribution/package/auxlib")
+    include("gravitino-jobs-*.jar")
+    exclude("*-empty.jar")
+    setDuplicatesStrategy(DuplicatesStrategy.EXCLUDE)
+  }
+
   register("copySubprojectLib", Copy::class) {
     subprojects.forEach() {
       if (!it.name.startsWith("authorization") &&
@@ -916,13 +1042,18 @@ tasks {
         !it.name.startsWith("filesystem") &&
         !it.name.startsWith("flink") &&
         !it.name.startsWith("iceberg") &&
+        !it.name.startsWith("lance") &&
         !it.name.startsWith("integration-test") &&
         !it.name.startsWith("spark") &&
         !it.name.startsWith("trino-connector") &&
+        it.name != "hive-metastore2-libs" &&
+        it.name != "hive-metastore3-libs" &&
+        !it.name.startsWith("optimizer") &&
         it.name != "hive-metastore-common" &&
         it.name != "docs" &&
         it.name != "hadoop-common" &&
         it.parent?.name != "bundles" &&
+        it.parent?.name != "maintenance" &&
         it.name != "mcp-server"
       ) {
         dependsOn("${it.name}:build")
@@ -949,7 +1080,10 @@ tasks {
       ":catalogs:catalog-lakehouse-hudi:copyLibAndConfig",
       ":catalogs:catalog-lakehouse-iceberg:copyLibAndConfig",
       ":catalogs:catalog-lakehouse-paimon:copyLibAndConfig",
-      ":catalogs:catalog-model:copyLibAndConfig"
+      ":catalogs:catalog-model:copyLibAndConfig",
+      ":catalogs:hive-metastore2-libs:copyLibs",
+      ":catalogs:hive-metastore3-libs:copyLibs",
+      ":catalogs:catalog-lakehouse-generic:copyLibAndConfig"
     )
   }
 
@@ -1104,5 +1238,13 @@ tasks.register("release") {
     println("Releasing project...")
   }
 
-  dependsOn(subprojects.map { it.tasks.named("build") })
+  // Use 'assemble' instead of 'build' to skip tests during release
+  // Tests have JDK version conflicts (some need JDK 8, some need JDK 17)
+  // and should be run separately in CI/CD with appropriate JDK configurations
+  // Only include subprojects that apply the Java plugin (exclude client-python)
+  dependsOn(
+    subprojects
+      .filter { it.name != "client-python" }
+      .map { it.tasks.named("assemble") }
+  )
 }

@@ -54,7 +54,7 @@ import org.apache.gravitino.dto.responses.DropResponse;
 import org.apache.gravitino.dto.responses.EntityListResponse;
 import org.apache.gravitino.dto.util.DTOConverters;
 import org.apache.gravitino.metrics.MetricNames;
-import org.apache.gravitino.server.authorization.MetadataFilterHelper;
+import org.apache.gravitino.server.authorization.MetadataAuthzHelper;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationMetadata;
 import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
@@ -84,8 +84,10 @@ public class CatalogOperations {
   @Produces("application/vnd.gravitino.v1+json")
   @Timed(name = "list-catalog." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "list-catalog", absolute = true)
+  @AuthorizationExpression(expression = "")
   public Response listCatalogs(
-      @PathParam("metalake") String metalake,
+      @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
+          String metalake,
       @QueryParam("details") @DefaultValue("false") boolean verbose) {
     LOG.info(
         "Received list catalog {} request for metalake: {}, ",
@@ -100,9 +102,9 @@ public class CatalogOperations {
             if (verbose) {
               Catalog[] catalogs = catalogDispatcher.listCatalogsInfo(catalogNS);
               catalogs =
-                  MetadataFilterHelper.filterByExpression(
+                  MetadataAuthzHelper.filterByExpression(
                       metalake,
-                      AuthorizationExpressionConstants.loadCatalogAuthorizationExpression,
+                      AuthorizationExpressionConstants.LOAD_CATALOG_AUTHORIZATION_EXPRESSION,
                       Entity.EntityType.CATALOG,
                       catalogs,
                       (catalogEntity) ->
@@ -113,9 +115,9 @@ public class CatalogOperations {
             } else {
               NameIdentifier[] idents = catalogDispatcher.listCatalogs(catalogNS);
               idents =
-                  MetadataFilterHelper.filterByExpression(
+                  MetadataAuthzHelper.filterByExpression(
                       metalake,
-                      AuthorizationExpressionConstants.loadCatalogAuthorizationExpression,
+                      AuthorizationExpressionConstants.LOAD_CATALOG_AUTHORIZATION_EXPRESSION,
                       Entity.EntityType.CATALOG,
                       idents);
               Response response = Utils.ok(new EntityListResponse(idents));

@@ -73,7 +73,7 @@ public class PartitionOperations {
   @Timed(name = "list-partition-name." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "list-partition-name", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadTableAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_TABLE_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.TABLE)
   public Response listPartitionNames(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -129,7 +129,7 @@ public class PartitionOperations {
   @Timed(name = "get-partition." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "get-partition", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadTableAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_TABLE_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.TABLE)
   public Response getPartition(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -171,7 +171,7 @@ public class PartitionOperations {
   @Timed(name = "add-partitions." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "add-partitions", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.alterTableAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.MODIFY_TABLE_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.TABLE)
   public Response addPartitions(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -180,19 +180,22 @@ public class PartitionOperations {
       @PathParam("schema") @AuthorizationMetadata(type = Entity.EntityType.SCHEMA) String schema,
       @PathParam("table") @AuthorizationMetadata(type = Entity.EntityType.TABLE) String table,
       AddPartitionsRequest request) {
-    LOG.info(
-        "Received add {} partition(s) request for table {}.{}.{}.{} ",
-        request.getPartitions().length,
-        metalake,
-        catalog,
-        schema,
-        table);
-    Preconditions.checkArgument(
-        request.getPartitions().length == 1, "Only one partition is supported");
-
-    request.validate();
-
     try {
+      if (request == null || request.getPartitions() == null) {
+        throw new IllegalArgumentException("partitions must not be null");
+      }
+      LOG.info(
+          "Received add {} partition(s) request for table {}.{}.{}.{} ",
+          request.getPartitions().length,
+          metalake,
+          catalog,
+          schema,
+          table);
+      Preconditions.checkArgument(
+          request.getPartitions().length == 1, "Only one partition is supported");
+
+      request.validate();
+
       return Utils.doAs(
           httpRequest,
           () -> {
@@ -215,7 +218,7 @@ public class PartitionOperations {
   @Timed(name = "drop-partition." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "drop-partition", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.alterTableAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.MODIFY_TABLE_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.TABLE)
   public Response dropPartition(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)

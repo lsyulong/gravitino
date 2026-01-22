@@ -26,6 +26,7 @@ public enum OperationType {
   PURGE_TABLE,
   LOAD_TABLE,
   LOAD_TABLE_CREDENTIAL,
+  PLAN_TABLE_SCAN,
   LIST_TABLE,
   ALTER_TABLE,
   RENAME_TABLE,
@@ -142,6 +143,7 @@ public enum OperationType {
   LIST_ROLE_NAMES,
   GRANT_PRIVILEGES,
   REVOKE_PRIVILEGES,
+  OVERRIDE_PRIVILEGES,
 
   // Owner operations
   GET_OWNER,

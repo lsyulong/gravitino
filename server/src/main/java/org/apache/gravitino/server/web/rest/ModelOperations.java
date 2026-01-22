@@ -63,7 +63,7 @@ import org.apache.gravitino.model.Model;
 import org.apache.gravitino.model.ModelChange;
 import org.apache.gravitino.model.ModelVersion;
 import org.apache.gravitino.model.ModelVersionChange;
-import org.apache.gravitino.server.authorization.MetadataFilterHelper;
+import org.apache.gravitino.server.authorization.MetadataAuthzHelper;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationMetadata;
 import org.apache.gravitino.server.authorization.expression.AuthorizationExpressionConstants;
@@ -92,7 +92,7 @@ public class ModelOperations {
   @Timed(name = "list-model." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "list-model", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadSchemaAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_SCHEMA_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.SCHEMA)
   public Response listModels(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -109,9 +109,9 @@ public class ModelOperations {
             NameIdentifier[] modelIds = modelDispatcher.listModels(modelNs);
             modelIds = modelIds == null ? new NameIdentifier[0] : modelIds;
             modelIds =
-                MetadataFilterHelper.filterByExpression(
+                MetadataAuthzHelper.filterByExpression(
                     metalake,
-                    AuthorizationExpressionConstants.filterModelAuthorizationExpression,
+                    AuthorizationExpressionConstants.FILTER_MODEL_AUTHORIZATION_EXPRESSION,
                     Entity.EntityType.MODEL,
                     modelIds);
             LOG.info("List {} models under schema {}", modelIds.length, modelNs);
@@ -129,7 +129,7 @@ public class ModelOperations {
   @Timed(name = "get-model." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "get-model", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadModelAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_MODEL_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.MODEL)
   public Response getModel(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -163,7 +163,7 @@ public class ModelOperations {
           """
                       ANY(OWNER, METALAKE, CATALOG) ||
                       SCHEMA_OWNER_WITH_USE_CATALOG ||
-                      ANY_USE_CATALOG && ANY_USE_SCHEMA && ANY_CREATE_MODEL
+                      ANY_USE_CATALOG && ANY_USE_SCHEMA && ANY_REGISTER_MODEL
                       """,
       accessMetadataType = MetadataObject.Type.SCHEMA)
   public Response registerModel(
@@ -247,7 +247,7 @@ public class ModelOperations {
   @Timed(name = "list-model-versions." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "list-model-versions", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadModelAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_MODEL_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.MODEL)
   public Response listModelVersions(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -275,10 +275,10 @@ public class ModelOperations {
                                   NameIdentifierUtil.ofModelVersion(
                                       metalake, catalog, schema, model, modelVersion.version())
                                 };
-                            return MetadataFilterHelper.filterByExpression(
+                            return MetadataAuthzHelper.filterByExpression(
                                         metalake,
                                         AuthorizationExpressionConstants
-                                            .loadModelAuthorizationExpression,
+                                            .LOAD_MODEL_AUTHORIZATION_EXPRESSION,
                                         Entity.EntityType.MODEL_VERSION,
                                         nameIdentifiers)
                                     .length
@@ -300,10 +300,10 @@ public class ModelOperations {
                                   NameIdentifierUtil.ofModelVersion(
                                       metalake, catalog, schema, model, modelVersion)
                                 };
-                            return MetadataFilterHelper.filterByExpression(
+                            return MetadataAuthzHelper.filterByExpression(
                                         metalake,
                                         AuthorizationExpressionConstants
-                                            .loadModelAuthorizationExpression,
+                                            .LOAD_MODEL_AUTHORIZATION_EXPRESSION,
                                         Entity.EntityType.MODEL_VERSION,
                                         nameIdentifiers)
                                     .length
@@ -326,7 +326,7 @@ public class ModelOperations {
   @Timed(name = "get-model-version." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "get-model-version", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadModelAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_MODEL_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.MODEL)
   public Response getModelVersion(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -365,7 +365,7 @@ public class ModelOperations {
   @Timed(name = "get-model-alias." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "get-model-alias", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadModelAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_MODEL_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.MODEL)
   public Response getModelVersionByAlias(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -408,7 +408,7 @@ public class ModelOperations {
           """
                     ANY(OWNER, METALAKE, CATALOG) ||
                     SCHEMA_OWNER_WITH_USE_CATALOG ||
-                    ANY_USE_CATALOG && ANY_USE_SCHEMA && (MODEL::OWNER || ANY_USE_MODEL && ANY_CREATE_MODEL_VERSION)
+                    ANY_USE_CATALOG && ANY_USE_SCHEMA && (MODEL::OWNER || ANY_USE_MODEL && ANY_LINK_MODEL_VERSION)
                       """,
       accessMetadataType = MetadataObject.Type.MODEL)
   public Response linkModelVersion(
@@ -704,7 +704,7 @@ public class ModelOperations {
   @Timed(name = "get-model-version-uri." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "get-model-version-uri", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadModelAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_MODEL_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.MODEL)
   public Response getModelVersionUri(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)
@@ -744,7 +744,7 @@ public class ModelOperations {
   @Timed(name = "get-model-alias-uri." + MetricNames.HTTP_PROCESS_DURATION, absolute = true)
   @ResponseMetered(name = "get-model-alias-uri", absolute = true)
   @AuthorizationExpression(
-      expression = AuthorizationExpressionConstants.loadModelAuthorizationExpression,
+      expression = AuthorizationExpressionConstants.LOAD_MODEL_AUTHORIZATION_EXPRESSION,
       accessMetadataType = MetadataObject.Type.MODEL)
   public Response getModelVersionUriByAlias(
       @PathParam("metalake") @AuthorizationMetadata(type = Entity.EntityType.METALAKE)

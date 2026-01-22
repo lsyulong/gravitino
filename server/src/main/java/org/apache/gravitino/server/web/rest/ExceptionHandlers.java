@@ -28,6 +28,7 @@ import org.apache.gravitino.exceptions.ConnectionFailedException;
 import org.apache.gravitino.exceptions.FilesetAlreadyExistsException;
 import org.apache.gravitino.exceptions.ForbiddenException;
 import org.apache.gravitino.exceptions.GroupAlreadyExistsException;
+import org.apache.gravitino.exceptions.IllegalJobTemplateOperationException;
 import org.apache.gravitino.exceptions.InUseException;
 import org.apache.gravitino.exceptions.JobTemplateAlreadyExistsException;
 import org.apache.gravitino.exceptions.MetalakeAlreadyExistsException;
@@ -726,6 +727,8 @@ public class ExceptionHandlers {
       } else if (e instanceof NotInUseException) {
         return Utils.notInUse(errorMsg, e);
 
+      } else if (e instanceof ForbiddenException) {
+        return Utils.forbidden(errorMsg, e);
       } else {
         return super.handle(op, tag, parent, e);
       }
@@ -857,7 +860,10 @@ public class ExceptionHandlers {
       String errorMsg = getJobTemplateErrorMsg(formatted, op.name(), parent, getErrorMsg(e));
       LOG.warn(errorMsg, e);
 
-      if (e instanceof IllegalArgumentException) {
+      if (e instanceof IllegalJobTemplateOperationException) {
+        return Utils.illegalArguments(errorMsg, e);
+
+      } else if (e instanceof IllegalArgumentException) {
         return Utils.illegalArguments(errorMsg, e);
 
       } else if (e instanceof NotFoundException) {

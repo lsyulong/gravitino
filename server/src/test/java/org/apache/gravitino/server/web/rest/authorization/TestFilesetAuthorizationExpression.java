@@ -52,6 +52,7 @@ public class TestFilesetAuthorizationExpression {
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("METALAKE::USE_METALAKE")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("CATALOG::CREATE_CATALOG")));
     assertFalse(mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_FILESET")));
+    assertFalse(mockEvaluator.getResult(ImmutableSet.of("TABLE::CREATE_FILESET")));
     assertFalse(
         mockEvaluator.getResult(ImmutableSet.of("SCHEMA::CREATE_FILESET", "CATALOG::USE_CATALOG")));
     assertTrue(
@@ -82,7 +83,7 @@ public class TestFilesetAuthorizationExpression {
   public void testLoadFileset() throws OgnlException, NoSuchFieldException, IllegalAccessException {
     Field loadFilesetAuthorizationExpressionField =
         AuthorizationExpressionConstants.class.getDeclaredField(
-            "loadFilesetAuthorizationExpression");
+            "LOAD_FILESET_AUTHORIZATION_EXPRESSION");
     loadFilesetAuthorizationExpressionField.setAccessible(true);
     String loadFilesetAuthorizationExpression =
         (String) loadFilesetAuthorizationExpressionField.get(null);
