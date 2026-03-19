@@ -171,7 +171,6 @@ Launch Lance REST service using Docker(You need to start Gravitino server first)
 
 ```shell
 docker run -d --name lance-rest-service -p 9101:9101 \
-  -e LANCE_REST_GRAVITINO_URI=http://gravitino-host:8090 \
   -e LANCE_REST_GRAVITINO_METALAKE_NAME=your_metalake_name \
   -e LANCE_REST_GRAVITINO_URI=http://gravitino-host:port \
   apache/gravitino-lance-rest:latest
@@ -235,7 +234,6 @@ URL encoded:        lance_catalog%24schema%24table01
 - Currently supports only **two levels of namespaces** before tables
 - Tables **cannot** be nested deeper than schema level  
 - Parent catalog must be created in Gravitino before using Lance REST API
-- Metadata operations require Gravitino server to be available
 - Namespace deletion is recursive and irreversible
 :::
 
@@ -401,3 +399,7 @@ ns.create_table(create_table_request, body)
 
 </TabItem>
 </Tabs>
+
+## Integration with Lance REST
+
+To use the Lance REST service with Apache Spark, Ray and other engines, please refer to [lance-rest-integration](./lance-rest-integration.md) for more details.

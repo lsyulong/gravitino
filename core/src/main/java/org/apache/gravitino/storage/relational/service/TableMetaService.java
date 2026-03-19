@@ -22,6 +22,7 @@ import static org.apache.gravitino.metrics.source.MetricsSource.GRAVITINO_RELATI
 
 import com.google.common.base.Preconditions;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -288,6 +289,29 @@ public class TableMetaService {
     return SessionUtils.doWithCommitAndFetchResult(
         TableVersionMapper.class,
         mapper -> mapper.deleteTableVersionByLegacyTimeline(legacyTimeline, limit));
+  }
+
+  @Monitored(
+      metricsSource = GRAVITINO_RELATIONAL_STORE_METRIC_NAME,
+      baseMetricName = "batchGetTableByIdentifier")
+  public List<TableEntity> batchGetTableByIdentifier(List<NameIdentifier> identifiers) {
+    NameIdentifier firstIdent = identifiers.get(0);
+    NameIdentifier schemaIdent = NameIdentifierUtil.getSchemaIdentifier(firstIdent);
+    List<String> tableNames = new ArrayList<>(identifiers.size());
+    tableNames.add(identifiers.get(0).name());
+    for (int i = 1; i < identifiers.size(); i++) {
+      NameIdentifier ident = identifiers.get(i);
+      Preconditions.checkArgument(
+          Objects.equals(schemaIdent, NameIdentifierUtil.getSchemaIdentifier(ident)));
+      tableNames.add(ident.name());
+    }
+    Long schemaId = EntityIdService.getEntityId(schemaIdent, Entity.EntityType.SCHEMA);
+    return SessionUtils.doWithCommitAndFetchResult(
+        TableMetaMapper.class,
+        mapper -> {
+          List<TablePO> tableList = mapper.batchSelectTableByIdentifier(schemaId, tableNames);
+          return POConverters.fromTablePOs(tableList, firstIdent.namespace());
+        });
   }
 
   private void fillTablePOBuilderParentEntityId(TablePO.Builder builder, Namespace namespace) {

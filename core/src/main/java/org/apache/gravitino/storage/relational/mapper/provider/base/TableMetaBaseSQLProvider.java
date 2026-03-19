@@ -45,7 +45,8 @@ public class TableMetaBaseSQLProvider {
         + TABLE_NAME
         + " tm LEFT JOIN "
         + TableVersionMapper.TABLE_NAME
-        + " tv ON tm.table_id = tv.table_id AND tm.current_version = tv.version AND tv.deleted_at = 0"
+        + " tv ON tm.table_id = tv.table_id AND tm.current_version = tv.version"
+        + " AND tv.deleted_at = 0"
         + " WHERE tm.schema_id = #{schemaId} AND tm.deleted_at = 0";
   }
 
@@ -65,7 +66,8 @@ public class TableMetaBaseSQLProvider {
         + TABLE_NAME
         + " tm LEFT JOIN "
         + TableVersionMapper.TABLE_NAME
-        + " tv ON tm.table_id = tv.table_id AND tm.current_version = tv.version AND tv.deleted_at = 0"
+        + " tv ON tm.table_id = tv.table_id AND tm.current_version = tv.version"
+        + " AND tv.deleted_at = 0"
         + " WHERE tm.deleted_at = 0"
         + " AND tm.table_id IN ("
         + "<foreach collection='tableIds' item='tableId' separator=','>"
@@ -150,8 +152,10 @@ public class TableMetaBaseSQLProvider {
         + TABLE_NAME
         + " tm LEFT JOIN "
         + TableVersionMapper.TABLE_NAME
-        + " tv ON tm.table_id = tv.table_id AND tm.current_version = tv.version AND tv.deleted_at = 0"
-        + " WHERE tm.schema_id = #{schemaId} AND tm.table_name = #{tableName} AND tm.deleted_at = 0";
+        + " tv ON tm.table_id = tv.table_id AND tm.current_version = tv.version"
+        + " AND tv.deleted_at = 0"
+        + " WHERE tm.schema_id = #{schemaId} AND tm.table_name = #{tableName}"
+        + " AND tm.deleted_at = 0";
   }
 
   public String selectTableMetaById(@Param("tableId") Long tableId) {
@@ -336,5 +340,40 @@ public class TableMetaBaseSQLProvider {
             SchemaMetaMapper.TABLE_NAME,
             TABLE_NAME,
             TableVersionMapper.TABLE_NAME);
+  }
+
+  public String batchSelectTableByIdentifier(
+      @Param("schemaId") Long schemaId, @Param("tableNames") List<String> tableNames) {
+    return """
+            <script>
+            SELECT
+            tm.table_id AS tableId,
+            tm.table_name AS tableName,
+            tm.metalake_id AS metalakeId,
+            tm.catalog_id AS catalogId,
+            tm.schema_id AS schemaId,
+            tm.audit_info AS auditInfo,
+            tm.current_version AS currentVersion,
+            tm.last_version AS lastVersion,
+            tm.deleted_at AS deletedAt,
+            tv.format AS format,
+            tv.properties AS properties,
+            tv.partitioning AS partitions,
+            tv.sort_orders AS sortOrders,
+            tv.distribution AS distribution,
+            tv.indexes AS indexes,
+            tv.comment AS comment
+            FROM %s tm LEFT JOIN %s tv
+            ON tm.table_id = tv.table_id AND tm.current_version = tv.version
+            AND tv.deleted_at = 0
+            WHERE tm.schema_id = #{schemaId}
+            AND tm.table_name IN
+            <foreach collection="tableNames" item="tableName" open="(" separator="," close=")">
+            #{tableName}
+            </foreach>
+             AND tm.deleted_at = 0
+             </script>
+            """
+        .formatted(TABLE_NAME, TableVersionMapper.TABLE_NAME);
   }
 }
