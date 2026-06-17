@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d
         id: filter
         with:
           filters: |
@@ -78,8 +78,8 @@ jobs:
 
       - name: Integration test
         run: |
-          ./gradlew build -x :clients:client-python:build -x test -x web 
-          ./gradlew compileDistribution -x :clients:client-python:build -x test -x web 
+          ./gradlew build -PskipWeb=true -x :clients:client-python:build -x test -x web -PskipTrinoConnector=true
+          ./gradlew compileDistribution -PskipWeb=true -x :clients:client-python:build -x test -x web -PskipTrinoConnector=true
           cd clients/filesystem-fuse
           make test-s3
           make test-fuse-it
@@ -97,4 +97,3 @@ jobs:
             clients/filesystem-fuse/target/debug/fuse.log
             distribution/package/logs/gravitino-server.out
             distribution/package/logs/gravitino-server.log
-

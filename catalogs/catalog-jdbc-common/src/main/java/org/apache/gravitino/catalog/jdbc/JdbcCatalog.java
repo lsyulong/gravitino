@@ -19,7 +19,10 @@
 package org.apache.gravitino.catalog.jdbc;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.gravitino.catalog.jdbc.config.JdbcConfig;
 import org.apache.gravitino.catalog.jdbc.converter.JdbcColumnDefaultValueConverter;
 import org.apache.gravitino.catalog.jdbc.converter.JdbcExceptionConverter;
 import org.apache.gravitino.catalog.jdbc.converter.JdbcTypeConverter;
@@ -30,6 +33,7 @@ import org.apache.gravitino.connector.CatalogOperations;
 import org.apache.gravitino.connector.PropertiesMetadata;
 import org.apache.gravitino.connector.PropertyEntry;
 import org.apache.gravitino.connector.capability.Capability;
+import org.apache.gravitino.credential.JdbcCredential;
 
 /** Implementation of an Jdbc catalog in Gravitino. */
 public abstract class JdbcCatalog extends BaseCatalog<JdbcCatalog> {
@@ -112,5 +116,15 @@ public abstract class JdbcCatalog extends BaseCatalog<JdbcCatalog> {
   @Override
   public PropertiesMetadata tablePropertiesMetadata() throws UnsupportedOperationException {
     return TABLE_PROPERTIES_META;
+  }
+
+  @Override
+  protected void addCatalogSpecificCredentialProviders(
+      Map<String, String> properties, List<String> credentialProviders) {
+    String jdbcUser = properties.get(JdbcConfig.USERNAME.getKey());
+    String jdbcPassword = properties.get(JdbcConfig.PASSWORD.getKey());
+    if (StringUtils.isNotBlank(jdbcUser) && jdbcPassword != null) {
+      credentialProviders.add(JdbcCredential.JDBC_CREDENTIAL_TYPE);
+    }
   }
 }

@@ -37,6 +37,7 @@ import org.apache.gravitino.utils.ClassUtils;
 import org.apache.gravitino.utils.IsolatedClassLoader;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.Transaction;
 import org.apache.iceberg.catalog.Catalog;
@@ -44,8 +45,11 @@ import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.catalog.ViewCatalog;
+import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.jdbc.JdbcCatalogWithMetadataLocationSupport;
 import org.apache.iceberg.rest.CatalogHandlers;
+import org.apache.iceberg.rest.RESTCatalog;
+import org.apache.iceberg.rest.RESTCatalogProperties.SnapshotMode;
 import org.apache.iceberg.rest.requests.CreateNamespaceRequest;
 import org.apache.iceberg.rest.requests.CreateTableRequest;
 import org.apache.iceberg.rest.requests.CreateViewRequest;
@@ -71,14 +75,14 @@ public class IcebergCatalogWrapper implements AutoCloseable {
 
   public static final Logger LOG = LoggerFactory.getLogger(IcebergCatalogWrapper.class);
 
-  @Getter protected Catalog catalog;
-  private SupportsNamespaces asNamespaceCatalog;
+  private final Object initializationLock = new Object();
+  private volatile Catalog catalog;
+  private volatile SupportsNamespaces asNamespaceCatalog;
   private final IcebergCatalogBackend catalogBackend;
-  @Getter private final IcebergConfig icebergConfig;
+  private final IcebergConfig icebergConfig;
   private String catalogUri = null;
-  private Map<String, String> catalogPropertiesMap;
-  private TableMetadataCache metadataCache;
-  private Configuration configuration;
+  private volatile TableMetadataCache metadataCache;
+  private final Configuration configuration;
 
   public IcebergCatalogWrapper(IcebergConfig icebergConfig) {
     this.icebergConfig = icebergConfig;
@@ -95,66 +99,111 @@ public class IcebergCatalogWrapper implements AutoCloseable {
     if (!IcebergCatalogBackend.MEMORY.equals(catalogBackend)) {
       this.catalogUri = icebergConfig.get(IcebergConfig.CATALOG_URI);
     }
-    this.catalog = IcebergCatalogUtil.loadCatalogBackend(catalogBackend, icebergConfig);
-    if (catalog instanceof SupportsNamespaces) {
-      this.asNamespaceCatalog = (SupportsNamespaces) catalog;
+    Map<String, String> catalogPropertiesMap = icebergConfig.getIcebergCatalogProperties();
+    this.configuration = FileSystemUtils.createConfiguration(null, catalogPropertiesMap);
+  }
+
+  public Catalog getCatalog() {
+    Catalog loadedCatalog = catalog;
+    if (loadedCatalog != null) {
+      return loadedCatalog;
     }
 
-    this.metadataCache = loadTableMetadataCache(icebergConfig, catalog);
-    this.catalogPropertiesMap = icebergConfig.getIcebergCatalogProperties();
-    this.configuration = FileSystemUtils.createConfiguration(null, catalogPropertiesMap);
+    synchronized (initializationLock) {
+      if (catalog == null) {
+        catalog = IcebergCatalogUtil.loadCatalogBackend(catalogBackend, icebergConfig);
+      }
+      return catalog;
+    }
+  }
+
+  public IcebergConfig getIcebergConfig() {
+    return icebergConfig;
+  }
+
+  private SupportsNamespaces getNamespaceCatalog() {
+    SupportsNamespaces namespaceCatalog = asNamespaceCatalog;
+    if (namespaceCatalog != null) {
+      return namespaceCatalog;
+    }
+
+    synchronized (initializationLock) {
+      if (asNamespaceCatalog == null) {
+        Catalog loadedCatalog = getCatalog();
+        if (loadedCatalog instanceof SupportsNamespaces) {
+          asNamespaceCatalog = (SupportsNamespaces) loadedCatalog;
+        }
+      }
+      return asNamespaceCatalog;
+    }
+  }
+
+  private TableMetadataCache getMetadataCache() {
+    TableMetadataCache cache = metadataCache;
+    if (cache != null) {
+      return cache;
+    }
+
+    synchronized (initializationLock) {
+      if (metadataCache == null) {
+        metadataCache = loadTableMetadataCache(icebergConfig, getCatalog());
+      }
+      return metadataCache;
+    }
   }
 
   private void validateNamespace(Optional<Namespace> namespace) {
     namespace.ifPresent(
         n -> Preconditions.checkArgument(!n.toString().isEmpty(), "Namespace couldn't be empty"));
-    if (asNamespaceCatalog == null) {
+    if (getNamespaceCatalog() == null) {
       throw new UnsupportedOperationException(
           "The underlying catalog doesn't support namespace operation");
     }
   }
 
   private ViewCatalog getViewCatalog() {
-    if (!(catalog instanceof ViewCatalog)) {
-      throw new UnsupportedOperationException(catalog.name() + " is not support view");
+    Catalog loadedCatalog = getCatalog();
+    if (!(loadedCatalog instanceof ViewCatalog)) {
+      throw new UnsupportedOperationException(
+          "The underlying catalog '" + loadedCatalog.name() + "' does not support view operations");
     }
-    return (ViewCatalog) catalog;
+    return (ViewCatalog) loadedCatalog;
   }
 
   public CreateNamespaceResponse createNamespace(CreateNamespaceRequest request) {
     validateNamespace(Optional.of(request.namespace()));
-    return CatalogHandlers.createNamespace(asNamespaceCatalog, request);
+    return CatalogHandlers.createNamespace(getNamespaceCatalog(), request);
   }
 
   public void dropNamespace(Namespace namespace) {
     validateNamespace(Optional.of(namespace));
-    CatalogHandlers.dropNamespace(asNamespaceCatalog, namespace);
+    CatalogHandlers.dropNamespace(getNamespaceCatalog(), namespace);
   }
 
   public GetNamespaceResponse loadNamespace(Namespace namespace) {
     validateNamespace(Optional.of(namespace));
-    return CatalogHandlers.loadNamespace(asNamespaceCatalog, namespace);
+    return CatalogHandlers.loadNamespace(getNamespaceCatalog(), namespace);
   }
 
   public boolean namespaceExists(Namespace namespace) {
     validateNamespace(Optional.of(namespace));
-    return asNamespaceCatalog.namespaceExists(namespace);
+    return getNamespaceCatalog().namespaceExists(namespace);
   }
 
   public ListNamespacesResponse listNamespace(Namespace parent) {
     validateNamespace(Optional.empty());
-    return CatalogHandlers.listNamespaces(asNamespaceCatalog, parent);
+    return CatalogHandlers.listNamespaces(getNamespaceCatalog(), parent);
   }
 
   public UpdateNamespacePropertiesResponse updateNamespaceProperties(
       Namespace namespace, UpdateNamespacePropertiesRequest updateNamespacePropertiesRequest) {
     validateNamespace(Optional.of(namespace));
     return CatalogHandlers.updateNamespaceProperties(
-        asNamespaceCatalog, namespace, updateNamespacePropertiesRequest);
+        getNamespaceCatalog(), namespace, updateNamespacePropertiesRequest);
   }
 
   public LoadTableResponse registerTable(Namespace namespace, RegisterTableRequest request) {
-    return CatalogHandlers.registerTable(catalog, namespace, request);
+    return CatalogHandlers.registerTable(getCatalog(), namespace, request);
   }
 
   /**
@@ -170,36 +219,70 @@ public class IcebergCatalogWrapper implements AutoCloseable {
 
   public LoadTableResponse createTable(Namespace namespace, CreateTableRequest request) {
     request.validate();
+    Catalog loadedCatalog = getCatalog();
     if (request.stageCreate()) {
-      return CatalogHandlers.stageTableCreate(catalog, namespace, request);
+      return CatalogHandlers.stageTableCreate(loadedCatalog, namespace, request);
     }
-    LoadTableResponse loadTableResponse = CatalogHandlers.createTable(catalog, namespace, request);
+    LoadTableResponse loadTableResponse =
+        CatalogHandlers.createTable(loadedCatalog, namespace, request);
     if (loadTableResponse != null) {
       TableIdentifier tableIdentifier = TableIdentifier.of(namespace, request.name());
-      metadataCache.updateTableMetadata(tableIdentifier, loadTableResponse.tableMetadata());
+      getMetadataCache().updateTableMetadata(tableIdentifier, loadTableResponse.tableMetadata());
     }
     return loadTableResponse;
   }
 
   public void dropTable(TableIdentifier tableIdentifier) {
-    metadataCache.invalidate(tableIdentifier);
-    CatalogHandlers.dropTable(catalog, tableIdentifier);
+    getMetadataCache().invalidate(tableIdentifier);
+    CatalogHandlers.dropTable(getCatalog(), tableIdentifier);
   }
 
   public void purgeTable(TableIdentifier tableIdentifier) {
-    metadataCache.invalidate(tableIdentifier);
-    CatalogHandlers.purgeTable(catalog, tableIdentifier);
+    getMetadataCache().invalidate(tableIdentifier);
+    CatalogHandlers.purgeTable(getCatalog(), tableIdentifier);
+  }
+
+  /**
+   * Loads current {@link TableMetadata}, bypassing the response cache. Used by the async cleanup
+   * path to snapshot the metadata location before dropping the catalog entry.
+   *
+   * @param tableIdentifier the table
+   * @return its metadata
+   */
+  public TableMetadata loadTableMetadata(TableIdentifier tableIdentifier) {
+    return ((BaseTable) getCatalog().loadTable(tableIdentifier)).operations().current();
+  }
+
+  /**
+   * Returns the FileIO implementation configured for this catalog.
+   *
+   * @return the {@code io-impl} class, or the Iceberg default when unset
+   */
+  public String fileIOImpl() {
+    String impl = icebergConfig.get(IcebergConfig.IO_IMPL);
+    return StringUtils.isNotBlank(impl) ? impl : ResolvingFileIO.class.getName();
+  }
+
+  /**
+   * Returns catalog properties used to reconstruct FileIO in a cleanup worker.
+   *
+   * @return catalog properties snapshotted at enqueue time
+   */
+  public Map<String, String> fileIOProperties() {
+    return getIcebergConfig().getIcebergCatalogProperties();
   }
 
   public LoadTableResponse loadTable(TableIdentifier tableIdentifier) {
-    Optional<TableMetadata> tableMetadataOptional = metadataCache.getTableMetadata(tableIdentifier);
+    Optional<TableMetadata> tableMetadataOptional =
+        getMetadataCache().getTableMetadata(tableIdentifier);
     if (tableMetadataOptional.isPresent()) {
       return LoadTableResponse.builder().withTableMetadata(tableMetadataOptional.get()).build();
     }
 
-    LoadTableResponse loadTableResponse = CatalogHandlers.loadTable(catalog, tableIdentifier);
+    LoadTableResponse loadTableResponse =
+        CatalogHandlers.loadTable(getCatalog(), tableIdentifier, SnapshotMode.ALL);
     if (loadTableResponse != null) {
-      metadataCache.updateTableMetadata(tableIdentifier, loadTableResponse.tableMetadata());
+      getMetadataCache().updateTableMetadata(tableIdentifier, loadTableResponse.tableMetadata());
     }
     return loadTableResponse;
   }
@@ -214,33 +297,34 @@ public class IcebergCatalogWrapper implements AutoCloseable {
    *     support this operation
    */
   public Optional<String> getTableMetadataLocation(TableIdentifier tableIdentifier) {
-    if (catalog instanceof SupportsMetadataLocation) {
+    Catalog loadedCatalog = getCatalog();
+    if (loadedCatalog instanceof SupportsMetadataLocation) {
       return Optional.ofNullable(
-          ((SupportsMetadataLocation) catalog).metadataLocation(tableIdentifier));
+          ((SupportsMetadataLocation) loadedCatalog).metadataLocation(tableIdentifier));
     }
     return Optional.empty();
   }
 
   public boolean tableExists(TableIdentifier tableIdentifier) {
-    return catalog.tableExists(tableIdentifier);
+    return getCatalog().tableExists(tableIdentifier);
   }
 
   public ListTablesResponse listTable(Namespace namespace) {
-    return CatalogHandlers.listTables(catalog, namespace);
+    return CatalogHandlers.listTables(getCatalog(), namespace);
   }
 
   public void renameTable(RenameTableRequest renameTableRequest) {
-    metadataCache.invalidate(renameTableRequest.source());
-    CatalogHandlers.renameTable(catalog, renameTableRequest);
+    getMetadataCache().invalidate(renameTableRequest.source());
+    CatalogHandlers.renameTable(getCatalog(), renameTableRequest);
   }
 
   public LoadTableResponse updateTable(
       TableIdentifier tableIdentifier, UpdateTableRequest updateTableRequest) {
-    metadataCache.invalidate(tableIdentifier);
+    getMetadataCache().invalidate(tableIdentifier);
     LoadTableResponse loadTableResponse =
-        CatalogHandlers.updateTable(catalog, tableIdentifier, updateTableRequest);
+        CatalogHandlers.updateTable(getCatalog(), tableIdentifier, updateTableRequest);
     if (loadTableResponse != null) {
-      metadataCache.updateTableMetadata(tableIdentifier, loadTableResponse.tableMetadata());
+      getMetadataCache().updateTableMetadata(tableIdentifier, loadTableResponse.tableMetadata());
     }
     return loadTableResponse;
   }
@@ -283,14 +367,15 @@ public class IcebergCatalogWrapper implements AutoCloseable {
   }
 
   public boolean supportsViewOperations() {
-    if (!(catalog instanceof ViewCatalog)) {
+    Catalog loadedCatalog = getCatalog();
+    if (!(loadedCatalog instanceof ViewCatalog)) {
       return false;
     }
 
     // JDBC catalog only supports view operations from v1 schema version
-    if (catalog instanceof JdbcCatalogWithMetadataLocationSupport) {
+    if (loadedCatalog instanceof JdbcCatalogWithMetadataLocationSupport) {
       JdbcCatalogWithMetadataLocationSupport jdbcCatalog =
-          (JdbcCatalogWithMetadataLocationSupport) catalog;
+          (JdbcCatalogWithMetadataLocationSupport) loadedCatalog;
       return jdbcCatalog.supportsViewsWithSchemaVersion();
     }
 
@@ -299,19 +384,31 @@ public class IcebergCatalogWrapper implements AutoCloseable {
 
   @Override
   public void close() throws Exception {
-    LOG.info("Closing IcebergCatalogWrapper for catalog: {}", catalog.name());
-    if (catalog instanceof AutoCloseable) {
+    Catalog loadedCatalog = catalog;
+    if (loadedCatalog != null) {
+      LOG.info("Closing IcebergCatalogWrapper for catalog: {}", loadedCatalog.name());
+    } else {
+      LOG.info("Closing IcebergCatalogWrapper before catalog is initialized");
+    }
+    if (loadedCatalog instanceof AutoCloseable) {
       // JdbcCatalog and ClosableHiveCatalog implement AutoCloseable and will handle their own
       // cleanup
-      ((AutoCloseable) catalog).close();
+      ((AutoCloseable) loadedCatalog).close();
     }
-    metadataCache.close();
+    TableMetadataCache cache = metadataCache;
+    if (cache != null) {
+      cache.close();
+    }
 
     // For Iceberg REST server which use the same classloader when recreating catalog wrapper, the
     // Driver couldn't be reloaded after deregister()
     if (useDifferentClassLoader()) {
       closeJdbcDriverResources();
     }
+  }
+
+  public boolean isRESTCatalog() {
+    return getCatalog() instanceof RESTCatalog;
   }
 
   /**
@@ -394,11 +491,15 @@ public class IcebergCatalogWrapper implements AutoCloseable {
       return TableMetadataCache.DUMMY;
     }
 
-    Preconditions.checkArgument(
-        catalog instanceof SupportsMetadataLocation,
-        "You shouldn't enable Iceberg metadata cache for the catalog %s,"
-            + " because the catalog impl does not support get metadata location.",
-        catalog.name());
+    if (!(catalog instanceof SupportsMetadataLocation)) {
+      LOG.warn(
+          "Catalog '{}' does not support the table metadata cache, because the catalog impl does not "
+              + "support get metadata location. The cache is disabled. Set '{}' to an empty string "
+              + "(\"\") in the configuration before the next restart.",
+          catalog.name(),
+          IcebergConfig.TABLE_METADATA_CACHE_IMPL.getKey());
+      return TableMetadataCache.DUMMY;
+    }
 
     TableMetadataCache cache =
         ClassUtils.loadAndGetInstance(impl, Thread.currentThread().getContextClassLoader());

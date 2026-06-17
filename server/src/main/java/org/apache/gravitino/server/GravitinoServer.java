@@ -35,11 +35,13 @@ import org.apache.gravitino.catalog.PartitionDispatcher;
 import org.apache.gravitino.catalog.SchemaDispatcher;
 import org.apache.gravitino.catalog.TableDispatcher;
 import org.apache.gravitino.catalog.TopicDispatcher;
+import org.apache.gravitino.catalog.ViewDispatcher;
 import org.apache.gravitino.credential.CredentialOperationDispatcher;
 import org.apache.gravitino.job.JobOperationDispatcher;
 import org.apache.gravitino.lineage.LineageConfig;
 import org.apache.gravitino.lineage.LineageDispatcher;
 import org.apache.gravitino.lineage.LineageService;
+import org.apache.gravitino.listener.api.event.EventSource;
 import org.apache.gravitino.metalake.MetalakeDispatcher;
 import org.apache.gravitino.metrics.MetricsSystem;
 import org.apache.gravitino.metrics.source.MetricsSource;
@@ -47,10 +49,13 @@ import org.apache.gravitino.policy.PolicyDispatcher;
 import org.apache.gravitino.server.authentication.ServerAuthenticator;
 import org.apache.gravitino.server.authorization.GravitinoAuthorizerProvider;
 import org.apache.gravitino.server.web.ConfigServlet;
+import org.apache.gravitino.server.web.HealthAliasServlet;
+import org.apache.gravitino.server.web.HttpAuditFilter;
 import org.apache.gravitino.server.web.HttpServerMetricsSource;
 import org.apache.gravitino.server.web.JettyServer;
 import org.apache.gravitino.server.web.JettyServerConfig;
 import org.apache.gravitino.server.web.ObjectMapperProvider;
+import org.apache.gravitino.server.web.RequestContextFilter;
 import org.apache.gravitino.server.web.VersioningFilter;
 import org.apache.gravitino.server.web.filter.AccessControlNotAllowedFilter;
 import org.apache.gravitino.server.web.filter.GravitinoInterceptionService;
@@ -103,7 +108,7 @@ public class GravitinoServer extends ResourceConfig {
 
     JettyServerConfig jettyServerConfig =
         JettyServerConfig.fromConfig(serverConfig, WEBSERVER_CONF_PREFIX);
-    server.initialize(jettyServerConfig, SERVER_NAME, true /* shouldEnableUI */);
+    server.initialize(jettyServerConfig, SERVER_NAME);
 
     ServerAuthenticator.getInstance().initialize(serverConfig);
 
@@ -141,6 +146,7 @@ public class GravitinoServer extends ResourceConfig {
             bind(gravitinoEnv.catalogDispatcher()).to(CatalogDispatcher.class).ranked(1);
             bind(gravitinoEnv.schemaDispatcher()).to(SchemaDispatcher.class).ranked(1);
             bind(gravitinoEnv.tableDispatcher()).to(TableDispatcher.class).ranked(1);
+            bind(gravitinoEnv.viewDispatcher()).to(ViewDispatcher.class).ranked(1);
             bind(gravitinoEnv.partitionDispatcher()).to(PartitionDispatcher.class).ranked(1);
             bind(gravitinoEnv.filesetDispatcher()).to(FilesetDispatcher.class).ranked(1);
             bind(gravitinoEnv.topicDispatcher()).to(TopicDispatcher.class).ranked(1);
@@ -175,12 +181,23 @@ public class GravitinoServer extends ResourceConfig {
     server.addServlet(servlet, API_ANY_PATH);
     Servlet configServlet = new ConfigServlet(serverConfig);
     server.addServlet(configServlet, "/configs");
+
+    // Root-level aliases for enterprise GTMs that require probes at well-known root paths.
+    // Forwards /health, /health/live, /health/ready, and /health.html to the canonical
+    // /api/health/* endpoints.
+    server.addServlet(new HealthAliasServlet(), "/health/*");
+    server.addServlet(new HealthAliasServlet(), "/health.html");
+
+    server.addFilter(new RequestContextFilter(), API_ANY_PATH);
+    server.addFilter(
+        new HttpAuditFilter(gravitinoEnv.eventBus(), EventSource.GRAVITINO_SERVER), API_ANY_PATH);
     server.addCustomFilters(API_ANY_PATH);
     server.addFilter(new VersioningFilter(), API_ANY_PATH);
     server.addSystemFilters(API_ANY_PATH);
-
-    server.addFilter(new WebUIFilter(), "/"); // Redirect to the /ui/index html page.
-    server.addFilter(new WebUIFilter(), "/ui/*"); // Redirect to the static html file.
+    if (server.isWebUiEnabled()) {
+      server.addFilter(new WebUIFilter(), "/"); // Redirect to the /ui/index html page.
+      server.addFilter(new WebUIFilter(), "/ui/*"); // Redirect to the static html file.
+    }
   }
 
   public void start() throws Exception {

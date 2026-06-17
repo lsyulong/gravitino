@@ -1894,6 +1894,18 @@ public class CatalogMysqlIT extends BaseIT {
   }
 
   @Test
+  void testListSchemaWithDotInMysqlUnderlyingDatabaseName() {
+    String schemaWithDot = GravitinoITUtils.genRandomName("db") + ".nested";
+    String sql = String.format("CREATE DATABASE `%s`", schemaWithDot);
+    mysqlService.executeQuery(sql);
+
+    String[] schemas = catalog.asSchemas().listSchemas();
+    Assertions.assertTrue(
+        Arrays.asList(schemas).contains(schemaWithDot),
+        "Schema with dot in MySQL should be listed as logical schema name");
+  }
+
+  @Test
   void testMySQLSchemaNameCaseSensitive() {
     Column col1 = Column.of("col_1", Types.LongType.get(), "id", false, false, null);
     Column col2 = Column.of("col_2", Types.VarCharType.of(255), "code", false, false, null);
@@ -2366,6 +2378,52 @@ public class CatalogMysqlIT extends BaseIT {
         default:
           Assertions.fail("Unexpected column name: " + column.name());
       }
+    }
+  }
+
+  @Test
+  void testObjectNamesWithDots() {
+    // Create a MySQL database with a dot in its name directly (bypassing Gravitino)
+    String dottedSchemaName = GravitinoITUtils.genRandomName("db") + ".nested";
+    mysqlService.executeQuery("CREATE DATABASE `" + dottedSchemaName + "`");
+    try {
+      // listSchemas should include the schema with dot in name
+      String[] listedSchemas = catalog.asSchemas().listSchemas();
+      Set<String> schemaNames = Sets.newHashSet(listedSchemas);
+      Assertions.assertTrue(
+          schemaNames.contains(dottedSchemaName),
+          "listSchemas should return schema with dot in name: " + dottedSchemaName);
+
+      // loadSchema must succeed for a name that appeared in listSchemas
+      Schema loadedSchema = catalog.asSchemas().loadSchema(dottedSchemaName);
+      Assertions.assertEquals(
+          dottedSchemaName,
+          loadedSchema.name(),
+          "loadSchema must succeed for schema that appeared in listSchemas");
+
+      // Create a table directly in MySQL (bypassing Gravitino, since dotted schema names are not
+      // allowed at creation time, but may exist externally)
+      String testTableName = GravitinoITUtils.genRandomName("test_table");
+      mysqlService.executeQuery(
+          "CREATE TABLE `" + dottedSchemaName + "`.`" + testTableName + "` (id INT)");
+
+      // listTables under the dotted schema should include the created table
+      NameIdentifier[] listedTables =
+          catalog.asTableCatalog().listTables(Namespace.of(dottedSchemaName));
+      Set<String> tableNames =
+          Arrays.stream(listedTables).map(NameIdentifier::name).collect(Collectors.toSet());
+      Assertions.assertTrue(
+          tableNames.contains(testTableName), "listTables should return table under dotted schema");
+
+      // loadTable must succeed for a table that appeared in listTables
+      Table loadedTable =
+          catalog.asTableCatalog().loadTable(NameIdentifier.of(dottedSchemaName, testTableName));
+      Assertions.assertEquals(
+          testTableName,
+          loadedTable.name(),
+          "loadTable must succeed for table that appeared in listTables");
+    } finally {
+      mysqlService.executeQuery("DROP DATABASE IF EXISTS `" + dottedSchemaName + "`");
     }
   }
 }

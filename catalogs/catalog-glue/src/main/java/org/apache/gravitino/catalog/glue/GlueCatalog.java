@@ -18,11 +18,14 @@
  */
 package org.apache.gravitino.catalog.glue;
 
+import java.util.List;
 import java.util.Map;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.gravitino.connector.BaseCatalog;
 import org.apache.gravitino.connector.CatalogOperations;
 import org.apache.gravitino.connector.PropertiesMetadata;
 import org.apache.gravitino.connector.capability.Capability;
+import org.apache.gravitino.storage.S3Properties;
 
 /**
  * Implementation of an AWS Glue Data Catalog connector in Apache Gravitino.
@@ -32,7 +35,6 @@ import org.apache.gravitino.connector.capability.Capability;
  */
 public class GlueCatalog extends BaseCatalog<GlueCatalog> {
 
-  // TODO PR-02: replace stubs with real implementations
   static final GlueCatalogPropertiesMetadata CATALOG_PROPERTIES_METADATA =
       new GlueCatalogPropertiesMetadata();
 
@@ -60,13 +62,11 @@ public class GlueCatalog extends BaseCatalog<GlueCatalog> {
    */
   @Override
   protected CatalogOperations newOps(Map<String, String> config) {
-    // TODO PR-04: initialize GlueClient and wire up real operations
     return new GlueCatalogOperations();
   }
 
   @Override
   public Capability newCapability() {
-    // TODO PR-02: implement GlueCatalogCapability
     return new GlueCatalogCapability();
   }
 
@@ -83,5 +83,33 @@ public class GlueCatalog extends BaseCatalog<GlueCatalog> {
   @Override
   public PropertiesMetadata tablePropertiesMetadata() throws UnsupportedOperationException {
     return TABLE_PROPERTIES_METADATA;
+  }
+
+  @Override
+  public Map<String, String> propertiesWithCredentialProviders() {
+    Map<String, String> props = super.propertiesWithCredentialProviders();
+    // super() skips addCatalogSpecificCredentialProviders() when credential-providers is already
+    // set, so the aws-* → s3-* key mapping never runs. Apply it unconditionally here so that
+    // S3SecretKeyProvider.initialize() can read s3-access-key-id regardless of how the catalog
+    // was configured.
+    String accessKeyId = props.get(GlueConstants.AWS_ACCESS_KEY_ID);
+    String secretAccessKey = props.get(GlueConstants.AWS_SECRET_ACCESS_KEY);
+    if (StringUtils.isNotBlank(accessKeyId) && StringUtils.isNotBlank(secretAccessKey)) {
+      props.putIfAbsent(S3Properties.GRAVITINO_S3_ACCESS_KEY_ID, accessKeyId);
+      props.putIfAbsent(S3Properties.GRAVITINO_S3_SECRET_ACCESS_KEY, secretAccessKey);
+    }
+    return props;
+  }
+
+  @Override
+  protected void addCatalogSpecificCredentialProviders(
+      Map<String, String> properties, List<String> credentialProviders) {
+    String accessKeyId = properties.get(GlueConstants.AWS_ACCESS_KEY_ID);
+    String secretAccessKey = properties.get(GlueConstants.AWS_SECRET_ACCESS_KEY);
+    if (StringUtils.isNotBlank(accessKeyId) && StringUtils.isNotBlank(secretAccessKey)) {
+      properties.putIfAbsent(S3Properties.GRAVITINO_S3_ACCESS_KEY_ID, accessKeyId);
+      properties.putIfAbsent(S3Properties.GRAVITINO_S3_SECRET_ACCESS_KEY, secretAccessKey);
+    }
+    addStorageCredentialProviders(properties, credentialProviders);
   }
 }

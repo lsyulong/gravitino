@@ -38,13 +38,17 @@ import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.gravitino.Entity;
+import org.apache.gravitino.GravitinoEnv;
 import org.apache.gravitino.MetadataObject;
 import org.apache.gravitino.NameIdentifier;
+import org.apache.gravitino.authorization.AuthorizationRequestContext;
 import org.apache.gravitino.authorization.AuthorizationUtils;
 import org.apache.gravitino.exceptions.ForbiddenException;
 import org.apache.gravitino.exceptions.NoSuchMetalakeException;
+import org.apache.gravitino.listener.api.event.server.AuthorizationDenialFailureEvent;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationExpression;
 import org.apache.gravitino.server.authorization.annotations.AuthorizationRequest;
+import org.apache.gravitino.server.authorization.annotations.ExpressionCondition;
 import org.apache.gravitino.server.web.Utils;
 import org.apache.gravitino.server.web.filter.authorization.AuthorizationExecutor;
 import org.apache.gravitino.server.web.filter.authorization.AuthorizeExecutorFactory;
@@ -153,16 +157,21 @@ public class GravitinoInterceptionService implements InterceptionService {
               extractNameIdentifierFromParameters(parameters, args);
 
           Map<String, Object> pathParams = Utils.extractPathParamsFromParameters(parameters, args);
+          AuthorizationRequestContext authorizationRequestContext =
+              new AuthorizationRequestContext();
 
           // Check metalake and user existence before authorization
           NameIdentifier metalakeIdent = metadataContext.get(Entity.EntityType.METALAKE);
           if (metalakeIdent != null) {
             String currentUser = PrincipalUtils.getCurrentUserName();
             try {
-              AuthorizationUtils.checkCurrentUser(metalakeIdent.name(), currentUser);
+              AuthorizationUtils.checkCurrentUser(
+                  metalakeIdent.name(), currentUser, authorizationRequestContext);
             } catch (NoSuchMetalakeException e) {
               LOG.warn(
                   "Metalake {} does not exist when validating user {}", metalakeIdent, currentUser);
+              // Not a real authz denial — metalake is absent, not forbidden. Skip event dispatch;
+              // HttpAuditFilter will emit a generic HttpRequestFailureEvent for this 403.
               return buildNoAuthResponse(expressionAnnotation, metadataContext, method, expression);
             } catch (ForbiddenException ex) {
               LOG.warn(
@@ -170,6 +179,7 @@ public class GravitinoInterceptionService implements InterceptionService {
                   currentUser,
                   metalakeIdent.name(),
                   ex.getMessage());
+              dispatchAuthzDenialEvent(currentUser, metalakeIdent, method.getName(), expression);
               return Utils.forbidden(ex.getMessage(), ex);
             } catch (Exception ex) {
               LOG.error(
@@ -186,7 +196,7 @@ public class GravitinoInterceptionService implements InterceptionService {
             AuthorizationRequest.RequestType requestType =
                 extractAuthorizationRequestTypeFromParameters(parameters);
             String secondaryExpression = expressionAnnotation.secondaryExpression();
-            String secondaryExpressionCondition =
+            ExpressionCondition secondaryExpressionCondition =
                 expressionAnnotation.secondaryExpressionCondition();
             executor =
                 AuthorizeExecutorFactory.create(
@@ -199,8 +209,16 @@ public class GravitinoInterceptionService implements InterceptionService {
                     args,
                     secondaryExpression,
                     secondaryExpressionCondition);
-            boolean authorizeResult = executor.execute();
+            boolean authorizeResult = executor.execute(authorizationRequestContext);
             if (!authorizeResult) {
+              MetadataObject.Type type = expressionAnnotation.accessMetadataType();
+              NameIdentifier accessMetadataName =
+                  metadataContext.get(Entity.EntityType.valueOf(type.name()));
+              dispatchAuthzDenialEvent(
+                  PrincipalUtils.getCurrentUserName(),
+                  accessMetadataName,
+                  method.getName(),
+                  expression);
               return buildNoAuthResponse(expressionAnnotation, metadataContext, method, expression);
             }
           }
@@ -240,6 +258,21 @@ public class GravitinoInterceptionService implements InterceptionService {
           expression);
 
       return buildNoAuthResponse(errorMessage, accessMetadataName, currentUser, methodName);
+    }
+
+    private void dispatchAuthzDenialEvent(
+        String user, NameIdentifier accessMetadataName, String methodName, String expression) {
+      try {
+        AuthorizationDenialFailureEvent event =
+            new AuthorizationDenialFailureEvent(user, accessMetadataName, methodName, expression);
+        GravitinoEnv.getInstance().eventBus().dispatchEvent(event);
+      } catch (Exception e) {
+        LOG.error(
+            "Failed to dispatch authorization denial event for user {} on operation {}",
+            user,
+            methodName,
+            e);
+      }
     }
 
     private Response buildNoAuthResponse(

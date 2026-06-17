@@ -104,6 +104,7 @@ public class TestCompatibilityUtils {
       {OperationType.LIST_TOPIC, Operation.LIST_TOPIC},
       {OperationType.CREATE_VIEW, Operation.CREATE_VIEW},
       {OperationType.ALTER_VIEW, Operation.ALTER_VIEW},
+      {OperationType.REPLACE_VIEW, Operation.REPLACE_VIEW},
       {OperationType.DROP_VIEW, Operation.DROP_VIEW},
       {OperationType.LOAD_VIEW, Operation.LOAD_VIEW},
       {OperationType.VIEW_EXISTS, Operation.VIEW_EXISTS},
@@ -184,6 +185,7 @@ public class TestCompatibilityUtils {
       {OperationType.DROP_FUNCTION, Operation.DROP_FUNCTION},
       {OperationType.LIST_FUNCTION, Operation.LIST_FUNCTION},
       {OperationType.LIST_FUNCTION_INFOS, Operation.LIST_FUNCTION_INFOS},
+      {OperationType.AUTHORIZATION_DENIAL, Operation.AUTHORIZATION_DENIAL},
       {OperationType.UNKNOWN, Operation.UNKNOWN_OPERATION},
       {null, Operation.UNKNOWN_OPERATION}
     };

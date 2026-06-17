@@ -22,6 +22,7 @@ package org.apache.gravitino.catalog.lakehouse.generic;
 import com.google.common.collect.ImmutableMap;
 import java.util.Map;
 import org.apache.gravitino.Schema;
+import org.apache.gravitino.catalog.lakehouse.lance.LanceTableOperations;
 import org.apache.gravitino.connector.PropertiesMetadata;
 import org.apache.gravitino.rel.Table;
 import org.junit.jupiter.api.Assertions;
@@ -41,13 +42,25 @@ public class TestPropertiesMetadata {
     PropertiesMetadata catalogPropertiesMetadata = genericCatalog.catalogPropertiesMetadata();
     Assertions.assertNotNull(catalogPropertiesMetadata);
 
-    Map<String, String> catalogProperties = ImmutableMap.of("location", "/tmp/test1");
+    Map<String, String> catalogProperties =
+        ImmutableMap.of(
+            "location", "/tmp/test1",
+            "lance.storage.endpoint", "http://minio:9000",
+            "lance.schema-refresh-mode", "VERSION_CHECK");
 
     String catalogLocation =
         (String)
             catalogPropertiesMetadata.getOrDefault(
                 catalogProperties, GenericCatalog.PROPERTY_LOCATION);
     Assertions.assertEquals("/tmp/test1", catalogLocation);
+    Assertions.assertTrue(catalogPropertiesMetadata.containsProperty("lance.storage.endpoint"));
+    Assertions.assertEquals(
+        "http://minio:9000",
+        catalogPropertiesMetadata.getOrDefault(catalogProperties, "lance.storage.endpoint"));
+    Assertions.assertTrue(catalogPropertiesMetadata.containsProperty("lance.schema-refresh-mode"));
+    Assertions.assertEquals(
+        LanceTableOperations.SchemaRefreshMode.VERSION_CHECK,
+        catalogPropertiesMetadata.getOrDefault(catalogProperties, "lance.schema-refresh-mode"));
   }
 
   @Test

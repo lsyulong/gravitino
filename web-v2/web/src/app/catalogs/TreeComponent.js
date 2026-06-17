@@ -231,6 +231,22 @@ export const TreeComponent = forwardRef(function TreeComponent(props, ref) {
               )}
             </span>
           )
+        case 'custom-icons-glue':
+          return (
+            <span
+              role='img'
+              className='anticon'
+              onMouseEnter={e => onMouseEnter(e, catalog)}
+              onMouseLeave={e => onMouseLeave(e, catalog)}
+              onClick={e => handleClickIcon(e, catalog)}
+            >
+              {isHover !== key ? (
+                <Icons.glue className='size-4'></Icons.glue>
+              ) : (
+                <Icons.RotateCw className='h-4 w-3'></Icons.RotateCw>
+              )}
+            </span>
+          )
       }
     } else {
       return (
@@ -302,6 +318,12 @@ export const TreeComponent = forwardRef(function TreeComponent(props, ref) {
             <Icons.iconify icon='material-symbols:function' className='my-icon-small' />
           </span>
         )
+      case 'view':
+        return (
+          <span role='img' aria-label='view' className='anticon anticon-frown'>
+            <Icons.iconify icon='ic:outline-table-view' className='my-icon-small' />
+          </span>
+        )
       default:
         return <></>
     }
@@ -323,11 +345,12 @@ export const TreeComponent = forwardRef(function TreeComponent(props, ref) {
       const catalogType = searchParams.get('catalogType')
       const schema = searchParams.get('schema')
       const table = searchParams.get('table')
+      const view = searchParams.get('view')
       const fileset = searchParams.get('fileset')
       const topic = searchParams.get('topic')
       const model = searchParams.get('model')
       const func = searchParams.get('function')
-      const entity = table || fileset || topic || model || func
+      const entity = table || view || fileset || topic || model || func
 
       if (!metalake) {
         dispatch(setExpanded([]))
@@ -461,20 +484,20 @@ export const TreeComponent = forwardRef(function TreeComponent(props, ref) {
     setIsHover(null)
   }
 
-  const onLoadData = node => {
+  const onLoadData = (node, reload = false) => {
     if (node.inUse === 'false') return new Promise(resolve => resolve())
     const { key, children } = node
 
     dispatch(setLoadedNodes([...store.loadedNodes, key]))
 
     return new Promise(resolve => {
-      if (children && children.length !== 0) {
+      if (!reload && children && children.length !== 0) {
         resolve()
 
         return
       }
 
-      dispatch(setIntoTreeNodeWithFetch({ key }))
+      dispatch(setIntoTreeNodeWithFetch({ key, reload }))
 
       resolve()
     })

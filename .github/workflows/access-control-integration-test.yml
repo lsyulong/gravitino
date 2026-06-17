@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d
         id: filter
         with:
           filters: |
@@ -78,7 +78,7 @@ jobs:
 
       - name: Package Gravitino
         run: |
-          ./gradlew compileDistribution -x test 
+          ./gradlew compileDistribution -PskipWeb=true -x test
 
       - name: Free up disk space
         run: |
@@ -87,9 +87,9 @@ jobs:
       - name: Authorization Integration Test (JDK${{ matrix.java-version }})
         id: integrationTest
         run: |
-          ./gradlew -PtestMode=embedded -PjdbcBackend=h2 -PskipDockerTests=false :authorizations:test
-          ./gradlew -PtestMode=deploy -PjdbcBackend=mysql -PskipDockerTests=false :authorizations:test
-          ./gradlew -PtestMode=deploy -PjdbcBackend=postgresql -PskipDockerTests=false :authorizations:test
+          ./gradlew -PtestMode=embedded -PjdbcBackend=h2 -PskipDockerTests=false -PskipWeb=true :authorizations:test
+          ./gradlew -PtestMode=deploy -PjdbcBackend=mysql -PskipDockerTests=false -PskipWeb=true :authorizations:test
+          ./gradlew -PtestMode=deploy -PjdbcBackend=postgresql -PskipDockerTests=false -PskipWeb=true :authorizations:test
 
       - name: Upload integrate tests reports
         uses: actions/upload-artifact@v7

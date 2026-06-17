@@ -100,6 +100,7 @@ public enum OperationType {
   // View event
   CREATE_VIEW,
   ALTER_VIEW,
+  REPLACE_VIEW,
   DROP_VIEW,
   LOAD_VIEW,
   VIEW_EXISTS,
@@ -195,6 +196,8 @@ public enum OperationType {
   DROP_FUNCTION,
   LIST_FUNCTION,
   LIST_FUNCTION_INFOS,
+
+  AUTHORIZATION_DENIAL,
 
   UNKNOWN,
 }

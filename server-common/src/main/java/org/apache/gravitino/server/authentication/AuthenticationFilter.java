@@ -33,12 +33,22 @@ import javax.servlet.ServletResponse;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import org.apache.gravitino.auth.AuthConstants;
+import org.apache.gravitino.dto.responses.ErrorResponse;
+import org.apache.gravitino.exceptions.ForbiddenException;
 import org.apache.gravitino.exceptions.UnauthorizedException;
+import org.apache.gravitino.server.web.HealthCheckPathMatcher;
+import org.apache.gravitino.server.web.ObjectMapperProvider;
 import org.apache.gravitino.utils.PrincipalUtils;
 
 public class AuthenticationFilter implements Filter {
 
   private final List<Authenticator> filterAuthenticators;
+
+  /**
+   * The matcher used to identify health check paths that bypass authentication. Subclasses may
+   * replace this with a server-specific matcher (e.g. {@code IcebergHealthCheckPathMatcher}).
+   */
+  protected HealthCheckPathMatcher healthCheckMatcher = new HealthCheckPathMatcher();
 
   public AuthenticationFilter() {
     filterAuthenticators = null;
@@ -55,6 +65,13 @@ public class AuthenticationFilter implements Filter {
   @Override
   public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
       throws IOException, ServletException {
+    // Health check endpoints must be reachable without credentials so that Kubernetes
+    // probes, load balancers, and global traffic managers can monitor server availability.
+    // See org.apache.gravitino.server.web.rest.HealthOperations.
+    if (isHealthCheckRequest(request)) {
+      chain.doFilter(request, response);
+      return;
+    }
     try {
       List<Authenticator> authenticators;
       if (filterAuthenticators == null || filterAuthenticators.isEmpty()) {
@@ -107,22 +124,49 @@ public class AuthenticationFilter implements Filter {
   }
 
   /**
-   * Sends an error response when authentication fails. Subclasses can override this to customize
-   * the error response format (e.g., Iceberg REST server returns JSON error bodies).
-   *
-   * <p>TODO: Gravitino server should override this method to return a correct JSON response
-   * following the Gravitino error response spec.
+   * Sends a JSON error response when authentication fails. Subclasses can override this to
+   * customize the error response format (e.g., Iceberg REST server returns Iceberg-specific JSON
+   * error bodies).
    *
    * @param response the HTTP servlet response
    * @param exception the authentication exception
    */
   protected void sendAuthErrorResponse(HttpServletResponse response, Exception exception)
       throws IOException {
-    int status =
-        exception instanceof UnauthorizedException
-            ? HttpServletResponse.SC_UNAUTHORIZED
-            : HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
-    response.sendError(status, exception.getMessage());
+    int httpStatus;
+    ErrorResponse errorResponse;
+
+    if (exception instanceof UnauthorizedException) {
+      httpStatus = HttpServletResponse.SC_UNAUTHORIZED;
+      errorResponse =
+          ErrorResponse.unauthorized(
+              exception.getClass().getSimpleName(), exception.getMessage(), exception);
+    } else if (exception instanceof ForbiddenException) {
+      httpStatus = HttpServletResponse.SC_FORBIDDEN;
+      errorResponse = ErrorResponse.forbidden(exception.getMessage(), exception);
+    } else {
+      httpStatus = HttpServletResponse.SC_INTERNAL_SERVER_ERROR;
+      errorResponse = ErrorResponse.internalError(exception.getMessage(), exception);
+    }
+
+    response.setStatus(httpStatus);
+    response.setContentType("application/json");
+    response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+    ObjectMapperProvider.objectMapper().writeValue(response.getWriter(), errorResponse);
+  }
+
+  /**
+   * Returns {@code true} if the request targets a health check endpoint that should bypass
+   * authentication, as determined by the configured {@link #healthCheckMatcher}.
+   *
+   * @param request the incoming servlet request
+   * @return {@code true} if the request should skip authentication
+   */
+  protected boolean isHealthCheckRequest(ServletRequest request) {
+    if (!(request instanceof HttpServletRequest)) {
+      return false;
+    }
+    return healthCheckMatcher.isHealthCheckPath(((HttpServletRequest) request).getRequestURI());
   }
 
   @Override

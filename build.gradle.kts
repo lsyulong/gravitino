@@ -61,10 +61,17 @@ plugins {
   alias(libs.plugins.errorprone)
 }
 
+val snappyJavaVersion: String = libs.versions.snappy.java.get()
+
 val scalaVersion: String = project.properties["scalaVersion"] as? String ?: extra["defaultScalaVersion"].toString()
 if (scalaVersion !in listOf("2.12", "2.13")) {
   throw GradleException("Scala version $scalaVersion is not supported.")
 }
+
+val skipWeb: Boolean = (project.findProperty("skipWeb") as? String)?.toBoolean() ?: false
+val distributionPackageDir = layout.projectDirectory.dir("distribution/package")
+val distributionPackageAllDir = layout.projectDirectory.dir("distribution/package-all")
+val subprojectJarOutputDirs = subprojects.map { it.layout.buildDirectory.dir("libs") }
 
 project.extra["extraJvmArgs"] =
   listOf(
@@ -311,6 +318,8 @@ fun excludePackagesForSparkConnector(project: Project) {
   }
 }
 
+val commonsBeanutilsVersion: String = libs.versions.commons.beanutils.get()
+
 subprojects {
   // Gravitino Python client project didn't need to apply the java plugin
   if (project.name == "client-python") {
@@ -326,6 +335,18 @@ subprojects {
   apply(plugin = "jacoco")
   apply(plugin = "maven-publish")
   apply(plugin = "java")
+
+  // Force upgrade commons-beanutils/snappy-java for all subprojects to resolve outdated transitive versions
+  // commons-beanutils: pulled by Hadoop, Hive, Spark, Flink, etc.
+  // snappy-java: pulled by Hadoop, Kafka, Iceberg, etc.
+  configurations.all {
+    resolutionStrategy.force("commons-beanutils:commons-beanutils:$commonsBeanutilsVersion")
+    resolutionStrategy.force("org.xerial.snappy:snappy-java:$snappyJavaVersion")
+
+    // Exclude log4j 1.x (CVE-2020-9493, CVSS 9.8) pulled transitively by Hive and Hadoop.
+    // The safe log4j-1.2-api bridge from Log4j 2.x is already included in the log4j bundle.
+    exclude(group = "log4j", module = "log4j")
+  }
 
   repositories {
     mavenCentral()
@@ -714,10 +735,14 @@ tasks.rat {
     "clients/client-python/tests/unittests/htmlcov/*",
     "clients/client-python/tests/integration/htmlcov/*",
     "clients/filesystem-fuse/Cargo.lock",
+    "dev/charts/gravitino/README.md",
+    "dev/charts/gravitino-iceberg-rest-server/README.md",
+    "dev/charts/gravitino-lance-rest-server/README.md",
     "dev/docker/**/*.xml",
     "dev/docker/**/*.conf",
     "dev/docker/kerberos-hive/kadm5.acl",
     "docs/**/*.md",
+    ".claude/**",
     "gradle/wrapper/gradle-wrapper.properties",
     "lineage/src/test/java/org/apache/gravitino/lineage/source/TestLineageOperations.java",
     "spark-connector/spark-common/src/test/resources/**",
@@ -773,30 +798,48 @@ jacoco {
 tasks {
   val projectDir = layout.projectDirectory
   val outputDir = projectDir.dir("distribution")
+  val cleanDistributionPackage by registering(Delete::class) {
+    group = "gravitino distribution"
+    delete(distributionPackageDir, distributionPackageAllDir)
+    delete(subprojectJarOutputDirs)
+  }
 
   val compileDistribution by registering {
-    dependsOn(
-      "copyCatalogLibAndConfigs",
-      "copySubprojectDependencies",
-      "copySubprojectLib",
-      "copyCliLib",
-      "copyJobsLib",
-      ":authorizations:copyLibAndConfig",
-      ":iceberg:iceberg-rest-server:copyLibAndConfigs",
-      ":lance:lance-rest-server:copyLibAndConfigs",
-      ":maintenance:optimizer:copyLibAndConfigs",
-      ":web:web:build",
-      ":web-v2:web:build"
-    )
+    val dependencies =
+      mutableListOf(
+        "copyCatalogLibAndConfigs",
+        "copySubprojectDependencies",
+        "copySubprojectLib",
+        "copyCliLib",
+        "copyJobsLib",
+        ":authorizations:copyLibAndConfig",
+        ":iceberg:iceberg-rest-server:copyLibAndConfigs",
+        ":lance:lance-rest-server:copyLibAndConfigs",
+        ":maintenance:optimizer:copyLibAndConfigs",
+        ":plugins:idp-basic:copyLibAndConfigs"
+      )
+    if (!skipWeb) {
+      dependencies.add(":web:web:build")
+      dependencies.add(":web-v2:web:build")
+    }
+    dependsOn(cleanDistributionPackage)
+    dependsOn(dependencies)
 
     group = "gravitino distribution"
-    outputs.dir(projectDir.dir("distribution/package"))
+    outputs.dir(distributionPackageDir)
+    outputs.dir(distributionPackageAllDir)
     doLast {
       copy {
         from(projectDir.dir("conf")) { into("package/conf") }
         from(projectDir.dir("bin")) { into("package/bin") }
-        from(projectDir.dir("web/web/build/libs/${rootProject.name}-web-$version.war")) { into("package/web") }
-        from(projectDir.dir("web-v2/web/build/libs/${rootProject.name}-web-$version.war")) { into("package/web-v2") }
+        if (!skipWeb) {
+          from(projectDir.dir("web/web/build/libs/${rootProject.name}-web-$version.war")) {
+            into("package/web")
+          }
+          from(projectDir.dir("web-v2/web/build/libs/${rootProject.name}-web-$version.war")) {
+            into("package/web-v2")
+          }
+        }
         from(projectDir.dir("scripts")) { into("package/scripts") }
         into(outputDir)
         rename { fileName ->
@@ -816,16 +859,22 @@ tasks {
         from(projectDir.file("LICENSE.bin")) { into("package") }
         from(projectDir.file("NOTICE.bin")) { into("package") }
         from(projectDir.file("README.md")) { into("package") }
-        from(projectDir.dir("web/web/licenses")) { into("package/web/licenses") }
-        from(projectDir.dir("web/web/LICENSE.bin")) { into("package/web") }
-        from(projectDir.dir("web/web/NOTICE.bin")) { into("package/web") }
-        from(projectDir.dir("web-v2/web/licenses")) { into("package/web-v2/licenses") }
-        from(projectDir.dir("web-v2/web/LICENSE.bin")) { into("package/web-v2") }
-        from(projectDir.dir("web-v2/web/NOTICE.bin")) { into("package/web-v2") }
+        if (!skipWeb) {
+          from(projectDir.dir("web/web/licenses")) { into("package/web/licenses") }
+          from(projectDir.dir("web/web/LICENSE.bin")) { into("package/web") }
+          from(projectDir.dir("web/web/NOTICE.bin")) { into("package/web") }
+          from(projectDir.dir("web-v2/web/licenses")) { into("package/web-v2/licenses") }
+          from(projectDir.dir("web-v2/web/LICENSE.bin")) { into("package/web-v2") }
+          from(projectDir.dir("web-v2/web/NOTICE.bin")) { into("package/web-v2") }
+        }
         into(outputDir)
         rename { fileName ->
           fileName.replace(".bin", "")
         }
+      }
+
+      if (skipWeb) {
+        delete(projectDir.dir("distribution/package/web"), projectDir.dir("distribution/package/web-v2"))
       }
 
       // Create the directory 'data' for storage.
@@ -834,8 +883,8 @@ tasks {
 
       // Copy the all directory distribution/package to distribution/package-all
       copy {
-        from(projectDir.dir("distribution/package"))
-        into(projectDir.dir("distribution/package-all"))
+        from(distributionPackageDir)
+        into(distributionPackageAllDir)
       }
 
       // remove catalogs-contrib modules from distribution/package
@@ -945,6 +994,7 @@ tasks {
 
   val assembleDistribution by registering(Tar::class) {
     dependsOn(
+      compileDistribution,
       ":trino-connector:trino-connector-435-439:assembleTrinoConnector",
       ":trino-connector:trino-connector-440-445:assembleTrinoConnector",
       ":trino-connector:trino-connector-446-451:assembleTrinoConnector",
@@ -957,7 +1007,7 @@ tasks {
     group = "gravitino distribution"
     finalizedBy("checksumDistribution")
     into("${rootProject.name}-$version-bin")
-    from(compileDistribution.map { it.outputs.files.single() })
+    from(distributionPackageDir)
     compression = Compression.GZIP
     archiveFileName.set("${rootProject.name}-$version-bin.tar.gz")
     destinationDirectory.set(projectDir.dir("distribution"))
@@ -1083,6 +1133,7 @@ tasks {
         it.name != "integration-test" &&
         it.parent?.name != "bundles" &&
         it.parent?.name != "maintenance" &&
+        it.parent?.name != "plugins" &&
         it.name != "mcp-server"
       ) {
         from(it.configurations.runtimeClasspath) {
@@ -1133,6 +1184,7 @@ tasks {
         it.name != "web" &&
         it.name != "web-v2" &&
         it.parent?.name != "bundles" &&
+        it.parent?.name != "plugins" &&
         it.parent?.name != "maintenance" &&
         it.name != "mcp-server"
       ) {
@@ -1172,6 +1224,32 @@ tasks {
 
   clean {
     dependsOn(cleanDistribution)
+  }
+}
+
+gradle.projectsEvaluated {
+  val cleanDistributionPackageTask = rootProject.tasks.named("cleanDistributionPackage")
+  val distributionPackagePaths =
+    listOf(distributionPackageDir, distributionPackageAllDir)
+      .map { it.asFile.toPath().toAbsolutePath().normalize() }
+  val subprojectJarOutputPaths =
+    subprojectJarOutputDirs.map { it.get().asFile.toPath().toAbsolutePath().normalize() }
+
+  allprojects {
+    tasks.withType<Jar>().configureEach {
+      mustRunAfter(cleanDistributionPackageTask)
+    }
+
+    tasks.withType<Copy>().configureEach {
+      val copyDestinationDir = destinationDir ?: return@configureEach
+      val destinationPath = copyDestinationDir.toPath().toAbsolutePath().normalize()
+      if (distributionPackagePaths.any { destinationPath.startsWith(it) }) {
+        dependsOn(cleanDistributionPackageTask)
+      }
+      if (subprojectJarOutputPaths.any { destinationPath.startsWith(it) }) {
+        mustRunAfter(cleanDistributionPackageTask)
+      }
+    }
   }
 }
 

@@ -60,6 +60,9 @@ public enum TestDatabaseName {
   /** Represents the MySQL database used for testing the catalog integration with MySQL. */
   MYSQL_CATALOG_MYSQL_IT,
 
+  /** Represents the MySQL database used for testing catalog credential integration. */
+  MYSQL_CATALOG_CREDENTIAL_IT,
+
   PG_JDBC_BACKEND,
 
   /** Represents the PostgreSQL database for CatalogPostgreSqlIT. */
@@ -116,6 +119,8 @@ public enum TestDatabaseName {
   },
   PG_ICEBERG_AUTHZ_IT,
 
+  PG_ICEBERG_ASYNC_CLEANUP_IT,
+
   CLICKHOUSE_CLICKHOUSE_ABSTRACT_IT,
   CLICKHOUSE_CATALOG_CLICKHOUSE_IT,
   CLICKHOUSE_AUDIT_CATALOG_CLICKHOUSE_IT,
@@ -131,4 +136,7 @@ public enum TestDatabaseName {
     }
   },
   FLINK_HIVE_CATALOG_IT,
+
+  /** Represents the MySQL database for the Flink Iceberg JDBC-backend catalog integration test. */
+  FLINK_ICEBERG_JDBC_CATALOG_IT,
 }

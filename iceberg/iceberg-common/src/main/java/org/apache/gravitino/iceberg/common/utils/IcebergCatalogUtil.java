@@ -42,6 +42,7 @@ import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.hive.HiveCatalog;
 import org.apache.iceberg.hive.HiveCatalogWithMetadataLocationSupport;
 import org.apache.iceberg.inmemory.InMemoryCatalog;
+import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.jdbc.JdbcCatalog;
 import org.apache.iceberg.jdbc.JdbcCatalogWithMetadataLocationSupport;
 import org.apache.iceberg.jdbc.UncheckedSQLException;
@@ -62,6 +63,7 @@ public class IcebergCatalogUtil {
     if (!resultProperties.containsKey(IcebergConstants.WAREHOUSE)) {
       resultProperties.put(IcebergConstants.WAREHOUSE, "/tmp");
     }
+    applyDefaultResolvingFileIO(resultProperties);
     memoryCatalog.initialize(icebergCatalogName, resultProperties);
     return memoryCatalog;
   }
@@ -72,6 +74,7 @@ public class IcebergCatalogUtil {
     String icebergCatalogName = icebergConfig.getCatalogBackendName();
 
     Map<String, String> properties = icebergConfig.getIcebergCatalogProperties();
+    applyDefaultResolvingFileIO(properties);
     properties.forEach(hdfsConfiguration::set);
     AuthenticationConfig authenticationConfig = new AuthenticationConfig(properties);
     if (authenticationConfig.isSimpleAuth()) {
@@ -98,6 +101,7 @@ public class IcebergCatalogUtil {
     String icebergCatalogName = icebergConfig.getCatalogBackendName();
 
     Map<String, String> properties = icebergConfig.getIcebergCatalogProperties();
+    applyDefaultResolvingFileIO(properties);
     try {
       // Load the jdbc driver
       Class.forName(driverClassName);
@@ -107,6 +111,15 @@ public class IcebergCatalogUtil {
     JdbcCatalog jdbcCatalog =
         new JdbcCatalogWithMetadataLocationSupport(
             icebergConfig.get(IcebergConfig.JDBC_INIT_TABLES));
+
+    // Default to V1 schema to support view operations; can be overridden by explicit config.
+    properties.putIfAbsent(IcebergConstants.ICEBERG_JDBC_SCHEMA_VERSION, "V1");
+
+    // Default to strict mode so that creating a table or view in a non-existent namespace fails
+    // with NoSuchNamespaceException (HTTP 404) instead of implicitly creating the namespace,
+    // matching the Iceberg REST spec and the memory backend behavior. Can be overridden by
+    // explicit config.
+    properties.putIfAbsent(IcebergConstants.ICEBERG_JDBC_STRICT_MODE, "true");
 
     HdfsConfiguration hdfsConfiguration = new HdfsConfiguration();
     properties.forEach(hdfsConfiguration::set);
@@ -128,9 +141,11 @@ public class IcebergCatalogUtil {
     RESTCatalog restCatalog = new RESTCatalog();
     HdfsConfiguration hdfsConfiguration = new HdfsConfiguration();
     Map<String, String> properties = Maps.newHashMap(icebergConfig.getIcebergCatalogProperties());
+    applyDefaultResolvingFileIO(properties);
 
     // REST catalog must use forward access token from the user request
     properties.put(AuthProperties.AUTH_TYPE, UserPrincipalForwardingAuthManager.class.getName());
+    applyRestCatalogHttpTimeoutProperties(icebergConfig, properties);
 
     properties.forEach(hdfsConfiguration::set);
     restCatalog.setConf(hdfsConfiguration);
@@ -141,11 +156,28 @@ public class IcebergCatalogUtil {
   private static Catalog loadCustomCatalog(IcebergConfig icebergConfig) {
     String customCatalogName = icebergConfig.getCatalogBackendName();
     String className = icebergConfig.get(IcebergConfig.CATALOG_BACKEND_IMPL);
+    Map<String, String> properties = icebergConfig.getIcebergCatalogProperties();
+    applyDefaultResolvingFileIO(properties);
     return CatalogUtil.loadCatalog(
-        className,
-        customCatalogName,
-        icebergConfig.getIcebergCatalogProperties(),
-        new HdfsConfiguration());
+        className, customCatalogName, properties, new HdfsConfiguration());
+  }
+
+  @VisibleForTesting
+  public static void applyDefaultResolvingFileIO(Map<String, String> properties) {
+    properties.putIfAbsent(IcebergConstants.IO_IMPL, ResolvingFileIO.class.getName());
+  }
+
+  @VisibleForTesting
+  static void applyRestCatalogHttpTimeoutProperties(
+      IcebergConfig icebergConfig, Map<String, String> properties) {
+    properties.put(
+        IcebergConstants.ICEBERG_REST_CLIENT_CONNECTION_TIMEOUT_MS,
+        String.valueOf(
+            icebergConfig.get(IcebergConfig.REST_CATALOG_BACKEND_CLIENT_CONNECTION_TIMEOUT_MS)));
+    properties.put(
+        IcebergConstants.ICEBERG_REST_CLIENT_SOCKET_TIMEOUT_MS,
+        String.valueOf(
+            icebergConfig.get(IcebergConfig.REST_CATALOG_BACKEND_CLIENT_SOCKET_TIMEOUT_MS)));
   }
 
   @VisibleForTesting

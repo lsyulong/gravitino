@@ -19,6 +19,9 @@
 package org.apache.gravitino.tag;
 
 import static org.apache.gravitino.Configs.DEFAULT_ENTITY_RELATIONAL_STORE;
+import static org.apache.gravitino.Configs.ENTITY_CHANGE_LOG_CLEANUP_INTERVAL_SECS;
+import static org.apache.gravitino.Configs.ENTITY_CHANGE_LOG_POLL_INTERVAL_SECS;
+import static org.apache.gravitino.Configs.ENTITY_CHANGE_LOG_RETENTION_SECS;
 import static org.apache.gravitino.Configs.ENTITY_RELATIONAL_JDBC_BACKEND_DRIVER;
 import static org.apache.gravitino.Configs.ENTITY_RELATIONAL_JDBC_BACKEND_MAX_CONNECTIONS;
 import static org.apache.gravitino.Configs.ENTITY_RELATIONAL_JDBC_BACKEND_URL;
@@ -131,6 +134,9 @@ public class TestTagManager {
     Mockito.when(config.get(ENTITY_RELATIONAL_JDBC_BACKEND_WAIT_MILLISECONDS)).thenReturn(1000L);
     Mockito.when(config.get(STORE_TRANSACTION_MAX_SKEW_TIME)).thenReturn(1000L);
     Mockito.when(config.get(STORE_DELETE_AFTER_TIME)).thenReturn(20 * 60 * 1000L);
+    Mockito.when(config.get(ENTITY_CHANGE_LOG_POLL_INTERVAL_SECS)).thenReturn(3L);
+    Mockito.when(config.get(ENTITY_CHANGE_LOG_RETENTION_SECS)).thenReturn(24 * 60 * 60L);
+    Mockito.when(config.get(ENTITY_CHANGE_LOG_CLEANUP_INTERVAL_SECS)).thenReturn(60 * 60L);
     Mockito.when(config.get(VERSION_RETENTION_COUNT)).thenReturn(1L);
     // Fix cache config for test
     Mockito.when(config.get(Configs.CACHE_ENABLED)).thenReturn(true);
@@ -354,6 +360,24 @@ public class TestTagManager {
     Assertions.assertEquals("new comment", removedPropTag.comment());
     Map<String, String> expectedProp2 = ImmutableMap.of("k2", "v2");
     Assertions.assertEquals(expectedProp2, removedPropTag.properties());
+  }
+
+  @Test
+  public void testAlterTagRenameToExistingTag() {
+    tagManager.createTag(METALAKE, "tag1", null, null);
+    tagManager.createTag(METALAKE, "tag2", null, null);
+
+    TagAlreadyExistsException exception =
+        Assertions.assertThrows(
+            TagAlreadyExistsException.class,
+            () -> tagManager.alterTag(METALAKE, "tag1", TagChange.rename("tag2")));
+
+    Assertions.assertEquals(
+        "Tag with name tag2 under metalake metalake_for_tag_test already exists",
+        exception.getMessage());
+
+    Assertions.assertEquals("tag1", tagManager.getTag(METALAKE, "tag1").name());
+    Assertions.assertEquals("tag2", tagManager.getTag(METALAKE, "tag2").name());
   }
 
   @Test

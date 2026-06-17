@@ -21,6 +21,7 @@ package org.apache.gravitino.iceberg;
 import com.google.common.collect.Lists;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import javax.inject.Singleton;
 import javax.servlet.Servlet;
 import org.apache.gravitino.Configs;
@@ -30,8 +31,11 @@ import org.apache.gravitino.iceberg.common.IcebergConfig;
 import org.apache.gravitino.iceberg.service.IcebergAuthenticationFilter;
 import org.apache.gravitino.iceberg.service.IcebergCatalogWrapperManager;
 import org.apache.gravitino.iceberg.service.IcebergExceptionMapper;
+import org.apache.gravitino.iceberg.service.IcebergHealthCheckPathMatcher;
 import org.apache.gravitino.iceberg.service.IcebergObjectMapperProvider;
 import org.apache.gravitino.iceberg.service.authorization.IcebergRESTServerContext;
+import org.apache.gravitino.iceberg.service.cleanup.IcebergCleanupJobStore;
+import org.apache.gravitino.iceberg.service.cleanup.IcebergCleanupManager;
 import org.apache.gravitino.iceberg.service.dispatcher.IcebergNamespaceEventDispatcher;
 import org.apache.gravitino.iceberg.service.dispatcher.IcebergNamespaceHookDispatcher;
 import org.apache.gravitino.iceberg.service.dispatcher.IcebergNamespaceOperationDispatcher;
@@ -48,8 +52,11 @@ import org.apache.gravitino.iceberg.service.metrics.IcebergMetricsManager;
 import org.apache.gravitino.iceberg.service.provider.IcebergConfigProvider;
 import org.apache.gravitino.iceberg.service.provider.IcebergConfigProviderFactory;
 import org.apache.gravitino.listener.EventBus;
+import org.apache.gravitino.listener.api.event.EventSource;
 import org.apache.gravitino.metrics.MetricsSystem;
 import org.apache.gravitino.metrics.source.MetricsSource;
+import org.apache.gravitino.server.web.HealthAliasServlet;
+import org.apache.gravitino.server.web.HttpAuditFilter;
 import org.apache.gravitino.server.web.HttpServerMetricsSource;
 import org.apache.gravitino.server.web.JettyServer;
 import org.apache.gravitino.server.web.JettyServerConfig;
@@ -75,6 +82,7 @@ public class RESTService implements GravitinoAuxiliaryService {
 
   private IcebergCatalogWrapperManager icebergCatalogWrapperManager;
   private IcebergMetricsManager icebergMetricsManager;
+  private Optional<IcebergCleanupManager> cleanupManager;
   private IcebergConfigProvider configProvider;
   private boolean auxMode;
 
@@ -103,6 +111,8 @@ public class RESTService implements GravitinoAuxiliaryService {
     this.configProvider = IcebergConfigProviderFactory.create(configProperties);
     configProvider.initialize(configProperties);
     String metalakeName = configProvider.getMetalakeName();
+    boolean skipAuthorizationForRestBackend =
+        icebergConfig.get(IcebergConfig.ICEBERG_REST_DISABLE_REST_AUTHZ);
 
     Boolean enableAuth = GravitinoEnv.getInstance().config().get(Configs.ENABLE_AUTHORIZATION);
     EventBus eventBus = GravitinoEnv.getInstance().eventBus();
@@ -110,33 +120,66 @@ public class RESTService implements GravitinoAuxiliaryService {
         new IcebergCatalogWrapperManager(configProperties, configProvider, auxMode, metalakeName);
     IcebergRESTServerContext authorizationContext =
         IcebergRESTServerContext.create(
-            configProvider, enableAuth, auxMode, icebergCatalogWrapperManager);
+            configProvider,
+            enableAuth,
+            auxMode,
+            skipAuthorizationForRestBackend,
+            icebergCatalogWrapperManager);
     this.icebergMetricsManager = new IcebergMetricsManager(icebergConfig);
-    IcebergTableOperationDispatcher icebergTableOperationDispatcher =
-        new IcebergTableOperationExecutor(icebergCatalogWrapperManager);
-    if (authorizationContext.isAuthorizationEnabled()) {
-      icebergTableOperationDispatcher =
-          new IcebergTableHookDispatcher(icebergTableOperationDispatcher);
+    if (auxMode) {
+      // Async cleanup reuses the entity store's shared relational backend (connection pool +
+      // per-backend SQL), which is only available when running embedded in the Gravitino server
+      // (auxiliary mode). In standalone mode the cleanup manager stays empty and purge requests
+      // fall back to synchronous purge.
+      this.cleanupManager =
+          Optional.of(
+              new IcebergCleanupManager(
+                  new IcebergCleanupJobStore(GravitinoEnv.getInstance().idGenerator()),
+                  icebergConfig));
+    } else {
+      this.cleanupManager = Optional.empty();
+      LOG.info(
+          "Async Iceberg table cleanup is only available in auxiliary mode; "
+              + "purge requests with async mode will fall back to synchronous purge.");
     }
-    IcebergTableEventDispatcher icebergTableEventDispatcher =
+
+    // The raw namespace operation executor is shared with the table and view hook dispatchers so
+    // their orphan-schema cleanup can probe namespace existence without firing namespace events.
+    IcebergNamespaceOperationDispatcher namespaceOperationDispatcher =
+        new IcebergNamespaceOperationExecutor(icebergCatalogWrapperManager, cleanupManager);
+
+    // Table: HookDispatcher -> EventDispatcher -> OperationExecutor
+    IcebergTableOperationDispatcher icebergTableOperationDispatcher =
+        new IcebergTableOperationExecutor(icebergCatalogWrapperManager, cleanupManager);
+    IcebergTableOperationDispatcher icebergTableEventDispatcher =
         new IcebergTableEventDispatcher(icebergTableOperationDispatcher, eventBus, metalakeName);
+    if (authorizationContext.isAuthorizationEnabled()) {
+      icebergTableEventDispatcher =
+          new IcebergTableHookDispatcher(icebergTableEventDispatcher, namespaceOperationDispatcher);
+    }
+    IcebergTableOperationDispatcher icebergTableDispatcher = icebergTableEventDispatcher;
+
+    // View: HookDispatcher -> EventDispatcher -> OperationExecutor
     IcebergViewOperationDispatcher icebergViewOperationDispatcher =
         new IcebergViewOperationExecutor(icebergCatalogWrapperManager);
-    if (authorizationContext.isAuthorizationEnabled()) {
-      icebergViewOperationDispatcher =
-          new IcebergViewHookDispatcher(icebergViewOperationDispatcher, metalakeName);
-    }
-    IcebergViewEventDispatcher icebergViewEventDispatcher =
+    IcebergViewOperationDispatcher icebergViewEventDispatcher =
         new IcebergViewEventDispatcher(icebergViewOperationDispatcher, eventBus, metalakeName);
-
-    IcebergNamespaceOperationDispatcher namespaceOperationDispatcher =
-        new IcebergNamespaceOperationExecutor(icebergCatalogWrapperManager);
     if (authorizationContext.isAuthorizationEnabled()) {
-      namespaceOperationDispatcher =
-          new IcebergNamespaceHookDispatcher(namespaceOperationDispatcher);
+      icebergViewEventDispatcher =
+          new IcebergViewHookDispatcher(
+              icebergViewEventDispatcher, namespaceOperationDispatcher, metalakeName);
     }
-    IcebergNamespaceEventDispatcher icebergNamespaceEventDispatcher =
+    IcebergViewOperationDispatcher icebergViewDispatcher = icebergViewEventDispatcher;
+
+    // Namespace: HookDispatcher -> EventDispatcher -> OperationExecutor
+    IcebergNamespaceOperationDispatcher icebergNamespaceEventDispatcher =
         new IcebergNamespaceEventDispatcher(namespaceOperationDispatcher, eventBus, metalakeName);
+    if (authorizationContext.isAuthorizationEnabled()) {
+      icebergNamespaceEventDispatcher =
+          new IcebergNamespaceHookDispatcher(icebergNamespaceEventDispatcher);
+    }
+    IcebergNamespaceOperationDispatcher icebergNamespaceDispatcher =
+        icebergNamespaceEventDispatcher;
 
     config.register(
         new AbstractBinder() {
@@ -149,9 +192,11 @@ public class RESTService implements GravitinoAuxiliaryService {
             }
             bind(icebergCatalogWrapperManager).to(IcebergCatalogWrapperManager.class).ranked(1);
             bind(icebergMetricsManager).to(IcebergMetricsManager.class).ranked(1);
-            bind(icebergTableEventDispatcher).to(IcebergTableOperationDispatcher.class).ranked(1);
-            bind(icebergViewEventDispatcher).to(IcebergViewOperationDispatcher.class).ranked(1);
-            bind(icebergNamespaceEventDispatcher)
+            cleanupManager.ifPresent(
+                manager -> bind(manager).to(IcebergCleanupManager.class).ranked(1));
+            bind(icebergTableDispatcher).to(IcebergTableOperationDispatcher.class).ranked(1);
+            bind(icebergViewDispatcher).to(IcebergViewOperationDispatcher.class).ranked(1);
+            bind(icebergNamespaceDispatcher)
                 .to(IcebergNamespaceOperationDispatcher.class)
                 .ranked(1);
           }
@@ -159,8 +204,19 @@ public class RESTService implements GravitinoAuxiliaryService {
 
     Servlet servlet = new ServletContainer(config);
     server.addServlet(servlet, ICEBERG_SPEC);
+    server.addFilter(
+        new HttpAuditFilter(
+            eventBus,
+            EventSource.GRAVITINO_ICEBERG_REST_SERVER,
+            new IcebergHealthCheckPathMatcher()),
+        ICEBERG_SPEC);
     server.addCustomFilters(ICEBERG_SPEC);
     server.addSystemFilters(ICEBERG_SPEC);
+
+    // Root-level aliases for health checks to improve compatibility with various monitoring
+    // systems that expect a /health endpoint.
+    server.addServlet(new HealthAliasServlet("/iceberg"), "/health/*");
+    server.addServlet(new HealthAliasServlet("/iceberg"), "/health.html");
   }
 
   @Override
@@ -179,11 +235,15 @@ public class RESTService implements GravitinoAuxiliaryService {
   @Override
   public void serviceStart() {
     icebergMetricsManager.start();
+    cleanupManager.ifPresent(IcebergCleanupManager::start);
     if (server != null) {
       try {
         server.start();
         LOG.info("Iceberg REST service started");
       } catch (Exception e) {
+        // Stop the components we already started so they don't outlive a failed startup.
+        cleanupManager.ifPresent(IcebergCleanupManager::close);
+        icebergMetricsManager.close();
         throw new RuntimeException(e);
       }
     }
@@ -204,6 +264,7 @@ public class RESTService implements GravitinoAuxiliaryService {
     if (icebergMetricsManager != null) {
       icebergMetricsManager.close();
     }
+    cleanupManager.ifPresent(IcebergCleanupManager::close);
   }
 
   public void join() {
