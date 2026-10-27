@@ -22,19 +22,25 @@ package org.apache.gravitino.iceberg.service.dispatcher;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import org.apache.gravitino.Entity;
 import org.apache.gravitino.auth.AuthConstants;
 import org.apache.gravitino.catalog.lakehouse.iceberg.IcebergConstants;
+import org.apache.gravitino.iceberg.service.CatalogWrapperForREST;
 import org.apache.gravitino.iceberg.service.IcebergCatalogWrapperManager;
 import org.apache.gravitino.iceberg.service.cleanup.IcebergCleanupManager;
 import org.apache.gravitino.listener.api.event.IcebergRequestContext;
+import org.apache.gravitino.meta.TableEntity;
+import org.apache.iceberg.TableMetadata;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.rest.requests.CreateNamespaceRequest;
 import org.apache.iceberg.rest.requests.RegisterTableRequest;
+import org.apache.iceberg.rest.requests.RegisterViewRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.GetNamespaceResponse;
 import org.apache.iceberg.rest.responses.ListNamespacesResponse;
 import org.apache.iceberg.rest.responses.LoadTableResponse;
+import org.apache.iceberg.rest.responses.LoadViewResponse;
 import org.apache.iceberg.rest.responses.UpdateNamespacePropertiesResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -126,11 +132,24 @@ public class IcebergNamespaceOperationExecutor implements IcebergNamespaceOperat
       IcebergRequestContext context,
       Namespace namespace,
       RegisterTableRequest registerTableRequest) {
+    TableEntity.NAME.validate(registerTableRequest.name(), Entity.EntityType.TABLE);
     IcebergCleanupHelper.rejectIfBeingPurged(
         cleanupManager, context.catalogName(), namespace, registerTableRequest.name());
 
+    CatalogWrapperForREST catalogWrapper =
+        icebergCatalogWrapperManager.getCatalogWrapper(context.catalogName());
+    TableMetadata metadata =
+        catalogWrapper.loadTableMetadataFromLocation(registerTableRequest.metadataLocation());
+    IcebergColumnFieldValidator.validateSchema(metadata.schema());
+    return catalogWrapper.registerTable(
+        namespace, registerTableRequest, context.requestCredentialVending());
+  }
+
+  @Override
+  public LoadViewResponse registerView(
+      IcebergRequestContext context, Namespace namespace, RegisterViewRequest registerViewRequest) {
     return icebergCatalogWrapperManager
         .getCatalogWrapper(context.catalogName())
-        .registerTable(namespace, registerTableRequest, context.requestCredentialVending());
+        .registerView(namespace, registerViewRequest);
   }
 }

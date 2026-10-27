@@ -43,6 +43,7 @@ import org.apache.gravitino.catalog.lakehouse.paimon.authentication.Authenticati
 import org.apache.gravitino.catalog.lakehouse.paimon.authentication.kerberos.KerberosConfig;
 import org.apache.gravitino.catalog.lakehouse.paimon.ops.PaimonBackendCatalogWrapper;
 import org.apache.gravitino.exceptions.ConnectionFailedException;
+import org.apache.gravitino.utils.ExceptionMessages;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
@@ -88,7 +89,7 @@ public class CatalogUtils {
         Catalog catalog = loadCatalogBackendWithKerberosAuth(paimonConfig, configuration);
         return new PaimonBackendCatalogWrapper(catalog, kerberosClient);
       } catch (Exception e) {
-        throw new RuntimeException("Failed to login with kerberos", e);
+        throw ExceptionMessages.wrap("Failed to login with kerberos", e);
       }
     } else {
       throw new UnsupportedOperationException(
@@ -142,16 +143,16 @@ public class CatalogUtils {
   private static void checkPaimonConfig(PaimonConfig paimonConfig) {
     String metastore = paimonConfig.get(CATALOG_BACKEND);
     Preconditions.checkArgument(
-        StringUtils.isNotBlank(metastore), "Paimon Catalog metastore can not be null or empty.");
+        StringUtils.isNotBlank(metastore), "Paimon Catalog metastore cannot be null or empty");
 
     String warehouse = paimonConfig.get(CATALOG_WAREHOUSE);
     Preconditions.checkArgument(
-        StringUtils.isNotBlank(warehouse), "Paimon Catalog warehouse can not be null or empty.");
+        StringUtils.isNotBlank(warehouse), "Paimon Catalog warehouse cannot be null or empty");
 
     if (!PaimonCatalogBackend.FILESYSTEM.name().equalsIgnoreCase(metastore)) {
       String uri = paimonConfig.get(CATALOG_URI);
       Preconditions.checkArgument(
-          StringUtils.isNotBlank(uri), "Paimon Catalog uri can not be null or empty.");
+          StringUtils.isNotBlank(uri), "Paimon Catalog URI cannot be null or empty");
     }
 
     if (PaimonCatalogBackend.JDBC.name().equalsIgnoreCase(metastore)) {

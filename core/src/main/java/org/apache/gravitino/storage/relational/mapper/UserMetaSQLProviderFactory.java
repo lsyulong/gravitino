@@ -61,6 +61,16 @@ public class UserMetaSQLProviderFactory {
     return getProvider().selectUserMetaByMetalakeIdAndName(metalakeId, name);
   }
 
+  /** Returns SQL that selects and locks an active user by ID. */
+  public static String selectUserMetaByIdForUpdate(@Param("userId") Long userId) {
+    return getProvider().selectUserMetaByIdForUpdate(userId);
+  }
+
+  /** Returns SQL that selects an active user by ID and locks it for shared access. */
+  public static String selectUserMetaByIdForShare(@Param("userId") Long userId) {
+    return getProvider().selectUserMetaByIdForShare(userId);
+  }
+
   public static String insertUserMeta(@Param("userMeta") UserPO userPO) {
     return getProvider().insertUserMeta(userPO);
   }
@@ -69,8 +79,9 @@ public class UserMetaSQLProviderFactory {
     return getProvider().insertUserMetaOnDuplicateKeyUpdate(userPO);
   }
 
-  public static String softDeleteUserMetaByUserId(@Param("userId") Long userId) {
-    return getProvider().softDeleteUserMetaByUserId(userId);
+  public static String softDeleteUserMetaByUserId(
+      @Param("userId") Long userId, @Param("currentVersion") Long currentVersion) {
+    return getProvider().softDeleteUserMetaByUserId(userId, currentVersion);
   }
 
   public static String softDeleteUserMetasByMetalakeId(@Param("metalakeId") Long metalakeId) {
@@ -92,6 +103,17 @@ public class UserMetaSQLProviderFactory {
 
   public static String listExtendedUserPOsByMetalakeId(@Param("metalakeId") Long metalakeId) {
     return getProvider().listExtendedUserPOsByMetalakeId(metalakeId);
+  }
+
+  public static String countUserMetasByMetalakeName(@Param("metalakeName") String metalakeName) {
+    return getProvider().countUserMetasByMetalakeName(metalakeName);
+  }
+
+  public static String listExtendedUserPOsByMetalakeNamePaginated(
+      @Param("metalakeName") String metalakeName,
+      @Param("offset") int offset,
+      @Param("limit") int limit) {
+    return getProvider().listExtendedUserPOsByMetalakeNamePaginated(metalakeName, offset, limit);
   }
 
   public static String deleteUserMetasByLegacyTimeline(

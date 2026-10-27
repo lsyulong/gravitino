@@ -19,8 +19,6 @@
 package org.apache.gravitino.iceberg.common.ops;
 
 import com.google.common.base.Preconditions;
-import java.sql.Driver;
-import java.sql.DriverManager;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -29,22 +27,28 @@ import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.gravitino.catalog.hadoop.fs.FileSystemUtils;
 import org.apache.gravitino.catalog.lakehouse.iceberg.IcebergCatalogBackend;
+import org.apache.gravitino.catalog.lakehouse.iceberg.IcebergConstants;
 import org.apache.gravitino.iceberg.common.IcebergConfig;
 import org.apache.gravitino.iceberg.common.cache.SupportsMetadataLocation;
 import org.apache.gravitino.iceberg.common.cache.TableMetadataCache;
 import org.apache.gravitino.iceberg.common.utils.IcebergCatalogUtil;
 import org.apache.gravitino.utils.ClassUtils;
-import org.apache.gravitino.utils.IsolatedClassLoader;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.iceberg.BaseMetadataTable;
 import org.apache.iceberg.BaseTable;
+import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.TableMetadata;
+import org.apache.iceberg.TableMetadataParser;
 import org.apache.iceberg.Transaction;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.catalog.ViewCatalog;
+import org.apache.iceberg.exceptions.NoSuchTableException;
+import org.apache.iceberg.exceptions.NoSuchViewException;
+import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.ResolvingFileIO;
 import org.apache.iceberg.jdbc.JdbcCatalogWithMetadataLocationSupport;
 import org.apache.iceberg.rest.CatalogHandlers;
@@ -54,16 +58,21 @@ import org.apache.iceberg.rest.requests.CreateNamespaceRequest;
 import org.apache.iceberg.rest.requests.CreateTableRequest;
 import org.apache.iceberg.rest.requests.CreateViewRequest;
 import org.apache.iceberg.rest.requests.RegisterTableRequest;
+import org.apache.iceberg.rest.requests.RegisterViewRequest;
 import org.apache.iceberg.rest.requests.RenameTableRequest;
 import org.apache.iceberg.rest.requests.UpdateNamespacePropertiesRequest;
 import org.apache.iceberg.rest.requests.UpdateTableRequest;
 import org.apache.iceberg.rest.responses.CreateNamespaceResponse;
 import org.apache.iceberg.rest.responses.GetNamespaceResponse;
+import org.apache.iceberg.rest.responses.ImmutableLoadViewResponse;
 import org.apache.iceberg.rest.responses.ListNamespacesResponse;
 import org.apache.iceberg.rest.responses.ListTablesResponse;
 import org.apache.iceberg.rest.responses.LoadTableResponse;
 import org.apache.iceberg.rest.responses.LoadViewResponse;
 import org.apache.iceberg.rest.responses.UpdateNamespacePropertiesResponse;
+import org.apache.iceberg.view.BaseView;
+import org.apache.iceberg.view.View;
+import org.apache.iceberg.view.ViewMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -80,7 +89,6 @@ public class IcebergCatalogWrapper implements AutoCloseable {
   private volatile SupportsNamespaces asNamespaceCatalog;
   private final IcebergCatalogBackend catalogBackend;
   private final IcebergConfig icebergConfig;
-  private String catalogUri = null;
   private volatile TableMetadataCache metadataCache;
   private final Configuration configuration;
 
@@ -95,9 +103,6 @@ public class IcebergCatalogWrapper implements AutoCloseable {
       if (StringUtils.isBlank(icebergConfig.get(IcebergConfig.CATALOG_WAREHOUSE))) {
         throw new IllegalArgumentException("The 'warehouse' parameter must have a value.");
       }
-    }
-    if (!IcebergCatalogBackend.MEMORY.equals(catalogBackend)) {
-      this.catalogUri = icebergConfig.get(IcebergConfig.CATALOG_URI);
     }
     Map<String, String> catalogPropertiesMap = icebergConfig.getIcebergCatalogProperties();
     this.configuration = FileSystemUtils.createConfiguration(null, catalogPropertiesMap);
@@ -254,6 +259,18 @@ public class IcebergCatalogWrapper implements AutoCloseable {
   }
 
   /**
+   * Loads table metadata directly from a metadata file location.
+   *
+   * @param metadataLocation metadata file location
+   * @return parsed table metadata
+   */
+  public TableMetadata loadTableMetadataFromLocation(String metadataLocation) {
+    try (FileIO fileIO = CatalogUtil.loadFileIO(fileIOImpl(), fileIOProperties(), null)) {
+      return TableMetadataParser.read(fileIO, metadataLocation);
+    }
+  }
+
+  /**
    * Returns the FileIO implementation configured for this catalog.
    *
    * @return the {@code io-impl} class, or the Iceberg default when unset
@@ -309,6 +326,19 @@ public class IcebergCatalogWrapper implements AutoCloseable {
     return getCatalog().tableExists(tableIdentifier);
   }
 
+  /**
+   * Returns whether the identifier resolves to a metadata table rather than to a table with that
+   * name. For example, {@code db.t.files} resolves to the files table of {@code db.t} when the
+   * namespace {@code db.t} has no table {@code files}.
+   *
+   * @param tableIdentifier the table identifier
+   * @return true if loading the identifier returns a metadata table
+   * @throws NoSuchTableException if neither exists
+   */
+  public boolean resolvesToMetadataTable(TableIdentifier tableIdentifier) {
+    return getCatalog().loadTable(tableIdentifier) instanceof BaseMetadataTable;
+  }
+
   public ListTablesResponse listTable(Namespace namespace) {
     return CatalogHandlers.listTables(getCatalog(), namespace);
   }
@@ -340,13 +370,38 @@ public class IcebergCatalogWrapper implements AutoCloseable {
     return CatalogHandlers.createView(getViewCatalog(), namespace, request);
   }
 
+  public LoadViewResponse registerView(Namespace namespace, RegisterViewRequest request) {
+    request.validate();
+    return CatalogHandlers.registerView(getViewCatalog(), namespace, request);
+  }
+
   public LoadViewResponse updateView(TableIdentifier viewIdentifier, UpdateTableRequest request) {
     request.validate();
     return CatalogHandlers.updateView(getViewCatalog(), viewIdentifier, request);
   }
 
+  /**
+   * Loads a view response from one metadata snapshot.
+   *
+   * @param viewIdentifier the view to load
+   * @return the view metadata and its location
+   * @throws NoSuchViewException if the view does not exist or disappears during loading
+   */
   public LoadViewResponse loadView(TableIdentifier viewIdentifier) {
-    return CatalogHandlers.loadView(getViewCatalog(), viewIdentifier);
+    View view = getViewCatalog().loadView(viewIdentifier);
+    Preconditions.checkState(
+        view instanceof BaseView, "Cannot wrap catalog that does not produce BaseView");
+    ViewMetadata metadata = ((BaseView) view).operations().current();
+    if (metadata == null) {
+      throw new NoSuchViewException("View does not exist: %s", viewIdentifier);
+    }
+    // CatalogHandlers' private viewResponse helper assumes non-null metadata. A native rename
+    // can remove the view after loadView's existence check, so build the same response from the
+    // checked snapshot rather than loading it again through the handler.
+    return ImmutableLoadViewResponse.builder()
+        .metadata(metadata)
+        .metadataLocation(metadata.metadataFileLocation())
+        .build();
   }
 
   public void dropView(TableIdentifier viewIdentifier) {
@@ -390,7 +445,10 @@ public class IcebergCatalogWrapper implements AutoCloseable {
     } else {
       LOG.info("Closing IcebergCatalogWrapper before catalog is initialized");
     }
-    if (loadedCatalog instanceof AutoCloseable) {
+    boolean internedMemoryCatalog =
+        catalogBackend == IcebergCatalogBackend.MEMORY
+            && icebergConfig.getAllConfig().containsKey(IcebergConstants.CATALOG_UUID);
+    if (!internedMemoryCatalog && loadedCatalog instanceof AutoCloseable) {
       // JdbcCatalog and ClosableHiveCatalog implement AutoCloseable and will handle their own
       // cleanup
       ((AutoCloseable) loadedCatalog).close();
@@ -399,77 +457,10 @@ public class IcebergCatalogWrapper implements AutoCloseable {
     if (cache != null) {
       cache.close();
     }
-
-    // For Iceberg REST server which use the same classloader when recreating catalog wrapper, the
-    // Driver couldn't be reloaded after deregister()
-    if (useDifferentClassLoader()) {
-      closeJdbcDriverResources();
-    }
   }
 
   public boolean isRESTCatalog() {
     return getCatalog() instanceof RESTCatalog;
-  }
-
-  /**
-   * Whether the wrapper is recreated with a different classloader.
-   *
-   * <p>Returning {@code true} allows JDBC drivers loaded by an isolated classloader to be
-   * deregistered when the wrapper closes so the classloader can be garbage collected. Implementors
-   * that intentionally reuse the same classloader (for example, an Iceberg REST server instance)
-   * should override and return {@code false} to skip deregistration.
-   */
-  protected boolean useDifferentClassLoader() {
-    return true;
-  }
-
-  private void closeJdbcDriverResources() {
-    // Because each catalog in Gravitino has its own classloader, after a catalog is no longer used
-    // for a long time or dropped, the instance of classloader needs to be released. In order to
-    // let JVM GC remove the classloader, we need to release the resources of the classloader. The
-    // resources include the driver of the catalog backend and the
-    // AbandonedConnectionCleanupThread of MySQL. For more information about
-    // AbandonedConnectionCleanupThread, please refer to the corresponding java doc of MySQL
-    // driver.
-    if (catalogUri != null && catalogUri.contains("mysql")) {
-      closeMySQLCatalogResource();
-    } else if (catalogUri != null && catalogUri.contains("postgresql")) {
-      closePostgreSQLCatalogResource();
-    }
-  }
-
-  private void closeMySQLCatalogResource() {
-    try {
-      // Close thread AbandonedConnectionCleanupThread if we are using `com.mysql.cj.jdbc.Driver`,
-      // for driver `com.mysql.jdbc.Driver` (deprecated), the daemon thread maybe not this one.
-      Class.forName("com.mysql.cj.jdbc.AbandonedConnectionCleanupThread")
-          .getMethod("uncheckedShutdown")
-          .invoke(null);
-      LOG.info("AbandonedConnectionCleanupThread has been shutdown...");
-
-      // Unload the MySQL driver, only Unload the driver if it is loaded by
-      // IsolatedClassLoader.
-      closeDriverLoadedByIsolatedClassLoader(catalogUri);
-    } catch (Exception e) {
-      LOG.warn("Failed to shutdown AbandonedConnectionCleanupThread or deregister MySQL driver", e);
-    }
-  }
-
-  private void closeDriverLoadedByIsolatedClassLoader(String uri) {
-    try {
-      Driver driver = DriverManager.getDriver(uri);
-      if (driver.getClass().getClassLoader().getClass()
-          == IsolatedClassLoader.CUSTOM_CLASS_LOADER_CLASS) {
-        DriverManager.deregisterDriver(driver);
-        LOG.info("Driver {} has been deregistered...", driver);
-      }
-    } catch (Exception e) {
-      LOG.warn("Failed to deregister driver", e);
-    }
-  }
-
-  private void closePostgreSQLCatalogResource() {
-    closeDriverLoadedByIsolatedClassLoader(catalogUri);
   }
 
   @Getter

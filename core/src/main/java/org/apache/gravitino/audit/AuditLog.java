@@ -21,6 +21,8 @@ package org.apache.gravitino.audit;
 
 import com.google.common.collect.ImmutableMap;
 import java.util.Map;
+import org.apache.gravitino.listener.api.event.AddPolicyForTagEvent;
+import org.apache.gravitino.listener.api.event.AddPolicyForTagFailureEvent;
 import org.apache.gravitino.listener.api.event.AlterCatalogEvent;
 import org.apache.gravitino.listener.api.event.AlterCatalogFailureEvent;
 import org.apache.gravitino.listener.api.event.AlterFilesetEvent;
@@ -105,6 +107,22 @@ import org.apache.gravitino.listener.api.event.PurgePartitionEvent;
 import org.apache.gravitino.listener.api.event.PurgePartitionFailureEvent;
 import org.apache.gravitino.listener.api.event.PurgeTableEvent;
 import org.apache.gravitino.listener.api.event.PurgeTableFailureEvent;
+import org.apache.gravitino.listener.api.event.RemovePolicyFromTagEvent;
+import org.apache.gravitino.listener.api.event.RemovePolicyFromTagFailureEvent;
+import org.apache.gravitino.listener.api.event.semantic.AlterSemanticModelEvent;
+import org.apache.gravitino.listener.api.event.semantic.AlterSemanticModelFailureEvent;
+import org.apache.gravitino.listener.api.event.semantic.CreateSemanticModelEvent;
+import org.apache.gravitino.listener.api.event.semantic.CreateSemanticModelFailureEvent;
+import org.apache.gravitino.listener.api.event.semantic.DropSemanticModelEvent;
+import org.apache.gravitino.listener.api.event.semantic.DropSemanticModelFailureEvent;
+import org.apache.gravitino.listener.api.event.semantic.ExportSemanticModelEvent;
+import org.apache.gravitino.listener.api.event.semantic.ExportSemanticModelFailureEvent;
+import org.apache.gravitino.listener.api.event.semantic.ImportSemanticModelEvent;
+import org.apache.gravitino.listener.api.event.semantic.ImportSemanticModelFailureEvent;
+import org.apache.gravitino.listener.api.event.semantic.ListSemanticModelEvent;
+import org.apache.gravitino.listener.api.event.semantic.ListSemanticModelFailureEvent;
+import org.apache.gravitino.listener.api.event.semantic.LoadSemanticModelEvent;
+import org.apache.gravitino.listener.api.event.semantic.LoadSemanticModelFailureEvent;
 import org.apache.gravitino.listener.api.event.server.AuthorizationDenialFailureEvent;
 import org.apache.gravitino.listener.api.event.view.AlterViewEvent;
 import org.apache.gravitino.listener.api.event.view.AlterViewFailureEvent;
@@ -262,6 +280,8 @@ public interface AuditLog {
 
     PLAN_TABLE_SCAN,
 
+    FETCH_SCAN_TASKS,
+
     PURGE_TABLE,
 
     LIST_TABLE,
@@ -330,6 +350,10 @@ public interface AuditLog {
 
     LIST_TAGS_INFO,
 
+    ADD_POLICY_FOR_TAG,
+
+    REMOVE_POLICY_FROM_TAG,
+
     CREATE_VIEW,
 
     ALTER_VIEW,
@@ -345,6 +369,8 @@ public interface AuditLog {
     RENAME_VIEW,
 
     LIST_VIEW,
+
+    REGISTER_VIEW,
 
     REGISTER_MODEL,
 
@@ -376,7 +402,21 @@ public interface AuditLog {
 
     REMOVE_USER,
 
+    REMOVE_USER_BY_EXTERNAL_ID,
+
     GET_USER,
+
+    GET_USER_BY_EXTERNAL_ID,
+
+    GET_USER_BY_ID,
+
+    REMOVE_USER_BY_ID,
+
+    ALTER_USER,
+
+    ENABLE_USER,
+
+    DISABLE_USER,
 
     LIST_USERS,
 
@@ -390,7 +430,17 @@ public interface AuditLog {
 
     REMOVE_GROUP,
 
+    REMOVE_GROUP_BY_EXTERNAL_ID,
+
     GET_GROUP,
+
+    GET_GROUP_BY_EXTERNAL_ID,
+
+    GET_GROUP_BY_ID,
+
+    REMOVE_GROUP_BY_ID,
+
+    ALTER_GROUP,
 
     LIST_GROUPS,
 
@@ -471,6 +521,20 @@ public interface AuditLog {
     ASSOCIATE_POLICIES_FOR_METADATA_OBJECT,
 
     GET_POLICY_FOR_METADATA_OBJECT,
+
+    CREATE_SEMANTIC_MODEL,
+
+    ALTER_SEMANTIC_MODEL,
+
+    DROP_SEMANTIC_MODEL,
+
+    LOAD_SEMANTIC_MODEL,
+
+    LIST_SEMANTIC_MODEL,
+    /** Import a Semantic Model from an Ossie document. */
+    IMPORT_SEMANTIC_MODEL,
+    /** Export a Semantic Model as an Ossie document. */
+    EXPORT_SEMANTIC_MODEL,
 
     REGISTER_FUNCTION,
 
@@ -576,6 +640,27 @@ public interface AuditLog {
         return LOAD_VIEW;
       } else if (event instanceof ListViewEvent || event instanceof ListViewFailureEvent) {
         return LIST_VIEW;
+      } else if (event instanceof CreateSemanticModelEvent
+          || event instanceof CreateSemanticModelFailureEvent) {
+        return CREATE_SEMANTIC_MODEL;
+      } else if (event instanceof AlterSemanticModelEvent
+          || event instanceof AlterSemanticModelFailureEvent) {
+        return ALTER_SEMANTIC_MODEL;
+      } else if (event instanceof DropSemanticModelEvent
+          || event instanceof DropSemanticModelFailureEvent) {
+        return DROP_SEMANTIC_MODEL;
+      } else if (event instanceof LoadSemanticModelEvent
+          || event instanceof LoadSemanticModelFailureEvent) {
+        return LOAD_SEMANTIC_MODEL;
+      } else if (event instanceof ListSemanticModelEvent
+          || event instanceof ListSemanticModelFailureEvent) {
+        return LIST_SEMANTIC_MODEL;
+      } else if (event instanceof ImportSemanticModelEvent
+          || event instanceof ImportSemanticModelFailureEvent) {
+        return IMPORT_SEMANTIC_MODEL;
+      } else if (event instanceof ExportSemanticModelEvent
+          || event instanceof ExportSemanticModelFailureEvent) {
+        return EXPORT_SEMANTIC_MODEL;
       } else if (event instanceof CreateFilesetEvent
           || event instanceof CreateFilesetFailureEvent) {
         return CREATE_FILESET;
@@ -590,6 +675,12 @@ public interface AuditLog {
         return LOAD_FILESET;
       } else if (event instanceof ListFilesetEvent || event instanceof ListFilesetFailureEvent) {
         return LIST_FILESET;
+      } else if (event instanceof AddPolicyForTagEvent
+          || event instanceof AddPolicyForTagFailureEvent) {
+        return ADD_POLICY_FOR_TAG;
+      } else if (event instanceof RemovePolicyFromTagEvent
+          || event instanceof RemovePolicyFromTagFailureEvent) {
+        return REMOVE_POLICY_FROM_TAG;
       } else if (event instanceof AuthorizationDenialFailureEvent) {
         return AUTHORIZATION_DENIAL;
       } else {

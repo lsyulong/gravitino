@@ -19,9 +19,19 @@
 
 package org.apache.gravitino.dto.util;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.Lists;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
+import org.apache.gravitino.authorization.Privilege;
+import org.apache.gravitino.dto.AuditDTO;
+import org.apache.gravitino.dto.job.JobTemplateDTO;
+import org.apache.gravitino.dto.job.ShellJobTemplateDTO;
+import org.apache.gravitino.dto.job.SparkJobTemplateDTO;
+import org.apache.gravitino.dto.policy.PolicyContentDTO;
 import org.apache.gravitino.dto.rel.expressions.LiteralDTO;
 import org.apache.gravitino.dto.rel.partitioning.ListPartitioningDTO;
 import org.apache.gravitino.dto.rel.partitioning.RangePartitioningDTO;
@@ -29,6 +39,12 @@ import org.apache.gravitino.dto.rel.partitions.IdentityPartitionDTO;
 import org.apache.gravitino.dto.rel.partitions.ListPartitionDTO;
 import org.apache.gravitino.dto.rel.partitions.PartitionDTO;
 import org.apache.gravitino.dto.rel.partitions.RangePartitionDTO;
+import org.apache.gravitino.job.JobTemplate;
+import org.apache.gravitino.job.ShellJobTemplate;
+import org.apache.gravitino.job.SparkJobTemplate;
+import org.apache.gravitino.policy.AccessControlContent;
+import org.apache.gravitino.policy.PolicyContent;
+import org.apache.gravitino.policy.PolicyContents;
 import org.apache.gravitino.rel.expressions.literals.Literal;
 import org.apache.gravitino.rel.expressions.literals.Literals;
 import org.apache.gravitino.rel.expressions.transforms.Transform;
@@ -245,5 +261,139 @@ public class TestDTOConverters {
     Assertions.assertEquals(
         Types.StringType.get().simpleString(), listPartitionAssignments[0].lists()[0][0].value());
     Assertions.assertEquals(properties, listPartitionAssignments[0].properties());
+  }
+
+  @Test
+  void testJobTemplateToDTOConvertsShellJobTemplate() {
+
+    // given
+    JobTemplate shellJobTemplate =
+        ShellJobTemplate.builder()
+            .withName("shell-job-template")
+            .withComment("This is a shell job template")
+            .withExecutable("/bin/echo")
+            .withArguments(Lists.newArrayList("Hello, World!"))
+            .withEnvironments(ImmutableMap.of("ENV_VAR", "value"))
+            .withScripts(Lists.newArrayList("/path/to/script.sh"))
+            .build();
+    AuditDTO audit = AuditDTO.builder().withCreator("test").withCreateTime(Instant.now()).build();
+
+    // when
+    JobTemplateDTO jobTemplateDTO = DTOConverters.toDTO(shellJobTemplate, audit);
+
+    // then
+    Assertions.assertInstanceOf(ShellJobTemplateDTO.class, jobTemplateDTO);
+    Assertions.assertEquals(JobTemplate.JobType.SHELL, jobTemplateDTO.jobType());
+    Assertions.assertEquals(shellJobTemplate.name(), jobTemplateDTO.name());
+    Assertions.assertEquals(shellJobTemplate.comment(), jobTemplateDTO.comment());
+    Assertions.assertEquals(shellJobTemplate.executable(), jobTemplateDTO.executable());
+    Assertions.assertEquals(shellJobTemplate.arguments(), jobTemplateDTO.arguments());
+    Assertions.assertEquals(shellJobTemplate.environments(), jobTemplateDTO.environments());
+    Assertions.assertEquals(shellJobTemplate.customFields(), jobTemplateDTO.customFields());
+    Assertions.assertEquals(
+        ((ShellJobTemplate) shellJobTemplate).scripts(),
+        ((ShellJobTemplateDTO) jobTemplateDTO).scripts());
+    Assertions.assertEquals(audit, jobTemplateDTO.audit());
+
+    // Round-tripping back through fromDTO must reproduce the original template.
+    Assertions.assertEquals(shellJobTemplate, DTOConverters.fromDTO(jobTemplateDTO));
+  }
+
+  @Test
+  void testJobTemplateToDTOConvertsSparkJobTemplate() {
+
+    // given
+    JobTemplate sparkJobTemplate =
+        SparkJobTemplate.builder()
+            .withName("spark-job-template")
+            .withComment("This is a spark job template")
+            .withExecutable("/path/to/spark-demo.jar")
+            .withClassName("org.example.SparkDemo")
+            .withArguments(
+                Lists.newArrayList("--input", "/path/to/input", "--output", "/path/to/output"))
+            .withEnvironments(ImmutableMap.of("SPARK_ENV_VAR", "value"))
+            .withConfigs(ImmutableMap.of("spark.executor.memory", "2g"))
+            .withJars(Lists.newArrayList("/path/to/dependency.jar"))
+            .withFiles(Lists.newArrayList("/path/to/config.yaml"))
+            .withArchives(Lists.newArrayList("/path/to/archive.zip"))
+            .build();
+    AuditDTO audit = AuditDTO.builder().withCreator("test").withCreateTime(Instant.now()).build();
+
+    // when
+    JobTemplateDTO jobTemplateDTO = DTOConverters.toDTO(sparkJobTemplate, audit);
+
+    // then
+    Assertions.assertInstanceOf(SparkJobTemplateDTO.class, jobTemplateDTO);
+    Assertions.assertEquals(JobTemplate.JobType.SPARK, jobTemplateDTO.jobType());
+    Assertions.assertEquals(sparkJobTemplate.name(), jobTemplateDTO.name());
+    Assertions.assertEquals(sparkJobTemplate.comment(), jobTemplateDTO.comment());
+    Assertions.assertEquals(sparkJobTemplate.executable(), jobTemplateDTO.executable());
+    Assertions.assertEquals(sparkJobTemplate.arguments(), jobTemplateDTO.arguments());
+    Assertions.assertEquals(sparkJobTemplate.environments(), jobTemplateDTO.environments());
+    Assertions.assertEquals(sparkJobTemplate.customFields(), jobTemplateDTO.customFields());
+    SparkJobTemplate expectedSpark = (SparkJobTemplate) sparkJobTemplate;
+    SparkJobTemplateDTO actualSparkDTO = (SparkJobTemplateDTO) jobTemplateDTO;
+    Assertions.assertEquals(expectedSpark.className(), actualSparkDTO.className());
+    Assertions.assertEquals(expectedSpark.jars(), actualSparkDTO.jars());
+    Assertions.assertEquals(expectedSpark.files(), actualSparkDTO.files());
+    Assertions.assertEquals(expectedSpark.archives(), actualSparkDTO.archives());
+    Assertions.assertEquals(expectedSpark.configs(), actualSparkDTO.configs());
+    Assertions.assertEquals(audit, jobTemplateDTO.audit());
+
+    // Round-tripping back through fromDTO must reproduce the original template.
+    Assertions.assertEquals(sparkJobTemplate, DTOConverters.fromDTO(jobTemplateDTO));
+  }
+
+  @Test
+  public void testFromRuntimeJobTemplateJsonNull() {
+    Assertions.assertNull(DTOConverters.fromRuntimeJobTemplateJson(null, "job-1"));
+  }
+
+  @Test
+  public void testFromRuntimeJobTemplateJson() {
+    String runtimeJobTemplateJson =
+        "{\"jobType\":\"shell\",\"name\":\"shell_template_1\",\"executable\":\"/bin/echo\"}";
+    JobTemplateDTO jobTemplateDTO =
+        DTOConverters.fromRuntimeJobTemplateJson(runtimeJobTemplateJson, "job-1");
+    Assertions.assertInstanceOf(ShellJobTemplateDTO.class, jobTemplateDTO);
+    Assertions.assertEquals("shell_template_1", jobTemplateDTO.name());
+    Assertions.assertEquals("/bin/echo", ((ShellJobTemplateDTO) jobTemplateDTO).executable());
+  }
+
+  @Test
+  public void testFromRuntimeJobTemplateJsonMalformedMessageOmitsRawContent() {
+    // The message must name the job (for debugging which row is affected) but must not echo the
+    // raw stored content - the resolved template can carry sensitive values (env vars, custom
+    // fields, credentials substituted from jobConf), and untrusted content in a log/exception
+    // message is also a log-injection risk.
+    String malformedJson = "{not-valid-json";
+    RuntimeException exception =
+        Assertions.assertThrows(
+            RuntimeException.class,
+            () -> DTOConverters.fromRuntimeJobTemplateJson(malformedJson, "job-1"));
+    Assertions.assertTrue(exception.getMessage().contains("job-1"));
+    Assertions.assertFalse(exception.getMessage().contains(malformedJson));
+  }
+
+  @Test
+  public void testAccessControlPolicyContentConvert() {
+    PolicyContent content =
+        PolicyContents.accessControl(
+            ImmutableList.of(Privilege.Name.SELECT_TABLE, Privilege.Name.READ_FILESET),
+            ImmutableList.of("analyst"));
+
+    PolicyContentDTO contentDTO = DTOConverters.toDTO(content);
+    Assertions.assertInstanceOf(PolicyContentDTO.AccessControlContentDTO.class, contentDTO);
+
+    PolicyContentDTO.AccessControlContentDTO accessControlContentDTO =
+        (PolicyContentDTO.AccessControlContentDTO) contentDTO;
+    Assertions.assertEquals(
+        ImmutableList.of(Privilege.Name.SELECT_TABLE, Privilege.Name.READ_FILESET),
+        accessControlContentDTO.privileges());
+    Assertions.assertEquals(ImmutableList.of("analyst"), accessControlContentDTO.applicableRoles());
+
+    PolicyContent roundTripped = DTOConverters.fromDTO(contentDTO);
+    Assertions.assertInstanceOf(AccessControlContent.class, roundTripped);
+    Assertions.assertEquals(content, roundTripped);
   }
 }

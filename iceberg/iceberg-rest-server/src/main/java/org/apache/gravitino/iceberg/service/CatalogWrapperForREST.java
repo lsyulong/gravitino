@@ -39,6 +39,7 @@ import org.apache.gravitino.credential.CatalogCredentialManager;
 import org.apache.gravitino.credential.Credential;
 import org.apache.gravitino.credential.CredentialConstants;
 import org.apache.gravitino.credential.CredentialPrivilege;
+import org.apache.gravitino.credential.CredentialPropertyUtils;
 import org.apache.gravitino.credential.PathBasedCredentialContext;
 import org.apache.gravitino.iceberg.common.IcebergConfig;
 import org.apache.gravitino.iceberg.common.ops.IcebergCatalogWrapper;
@@ -48,6 +49,7 @@ import org.apache.gravitino.storage.GCSProperties;
 import org.apache.gravitino.utils.ClassUtils;
 import org.apache.gravitino.utils.MapUtils;
 import org.apache.gravitino.utils.PrincipalUtils;
+import org.apache.iceberg.BaseTable;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.IncrementalAppendScan;
 import org.apache.iceberg.Scan;
@@ -57,13 +59,16 @@ import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.TableScan;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.exceptions.NoSuchPlanTaskException;
 import org.apache.iceberg.exceptions.ServiceUnavailableException;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.rest.CatalogHandlers;
 import org.apache.iceberg.rest.PlanStatus;
 import org.apache.iceberg.rest.requests.CreateTableRequest;
+import org.apache.iceberg.rest.requests.FetchScanTasksRequest;
 import org.apache.iceberg.rest.requests.PlanTableScanRequest;
 import org.apache.iceberg.rest.requests.RegisterTableRequest;
+import org.apache.iceberg.rest.responses.FetchScanTasksResponse;
 import org.apache.iceberg.rest.responses.ImmutableLoadCredentialsResponse;
 import org.apache.iceberg.rest.responses.LoadCredentialsResponse;
 import org.apache.iceberg.rest.responses.LoadTableResponse;
@@ -179,6 +184,20 @@ public class CatalogWrapperForREST extends IcebergCatalogWrapper {
     }
   }
 
+  /**
+   * Whether this catalog wrapper supports server-side scan planning.
+   *
+   * <p>Gravitino plans scans locally on top of loaded table metadata, which works for every backend
+   * this class handles directly (Hive, JDBC, Memory, Custom). {@link FederatedCatalogWrapper}
+   * delegates planning to the remote catalog instead, so it overrides this to report what that
+   * catalog actually advertises.
+   *
+   * @return {@code true} if the scan-plan endpoint should be advertised
+   */
+  public boolean supportsScanPlanOperations() {
+    return true;
+  }
+
   @Override
   public void close() throws Exception {
     try {
@@ -267,11 +286,6 @@ public class CatalogWrapperForREST extends IcebergCatalogWrapper {
               + DATA_ACCESS_REMOTE_SIGNING
               + "]");
     }
-  }
-
-  @Override
-  protected boolean useDifferentClassLoader() {
-    return false;
   }
 
   @VisibleForTesting
@@ -373,7 +387,19 @@ public class CatalogWrapperForREST extends IcebergCatalogWrapper {
   }
 
   /**
-   * Plan table scan and return scan tasks.
+   * Plan table scan without credential vending.
+   *
+   * @param tableIdentifier The table identifier.
+   * @param scanRequest The scan request parameters.
+   * @return PlanTableScanResponse with status=COMPLETED and file scan tasks.
+   */
+  public PlanTableScanResponse planTableScan(
+      TableIdentifier tableIdentifier, PlanTableScanRequest scanRequest) {
+    return planTableScan(tableIdentifier, scanRequest, false, CredentialPrivilege.READ);
+  }
+
+  /**
+   * Plan table scan and optionally inject vended storage credentials.
    *
    * <p>This method performs server-side scan planning to optimize query performance by reducing
    * client-side metadata loading and enabling parallel task execution.
@@ -384,18 +410,27 @@ public class CatalogWrapperForREST extends IcebergCatalogWrapper {
    * different from asynchronous mode (SUBMITTED status) where a plan ID is returned for later
    * retrieval.
    *
+   * <p>When {@code requestCredentialVending} is true and the table is eligible (non-local,
+   * non-HDFS), storage credentials are injected directly into the response using the table already
+   * loaded for scan planning -- avoiding a redundant {@code loadTable} call.
+   *
    * <p>Referenced from Iceberg PR #13400 for scan planning implementation.
    *
    * @param tableIdentifier The table identifier.
    * @param scanRequest The scan request parameters including filters, projections, snapshot-id,
    *     etc.
+   * @param requestCredentialVending whether the client requested credential vending
+   * @param privilege the credential privilege level for vending
    * @return PlanTableScanResponse with status=COMPLETED and file scan tasks.
    * @throws IllegalArgumentException if scan request validation fails
    * @throws org.apache.gravitino.exceptions.NoSuchTableException if table doesn't exist
    * @throws RuntimeException for other scan planning failures
    */
   public PlanTableScanResponse planTableScan(
-      TableIdentifier tableIdentifier, PlanTableScanRequest scanRequest) {
+      TableIdentifier tableIdentifier,
+      PlanTableScanRequest scanRequest,
+      boolean requestCredentialVending,
+      CredentialPrivilege privilege) {
 
     LOG.debug(
         "Planning scan for table: {}, snapshotId: {}, startSnapshotId: {}, endSnapshotId: {}, select: {}, caseSensitive: {}",
@@ -410,43 +445,47 @@ public class CatalogWrapperForREST extends IcebergCatalogWrapper {
       Table table = getCatalog().loadTable(tableIdentifier);
       Optional<PlanTableScanResponse> cachedResponse =
           scanPlanCache.get(ScanPlanCacheKey.create(tableIdentifier, table, scanRequest));
-      if (cachedResponse.isPresent()) {
-        LOG.info("Using cached scan plan for table: {}", tableIdentifier);
-        return cachedResponse.get();
-      }
-
-      List<FileScanTask> fileScanTasks = new ArrayList<>();
-
-      try (CloseableIterable<FileScanTask> scanTasks =
-          createFilePlanScanTasks(table, tableIdentifier, scanRequest)) {
-        for (FileScanTask fileScanTask : scanTasks) {
-          fileScanTasks.add(fileScanTask);
-        }
-      } catch (IOException e) {
-        LOG.error("Failed to close scan task iterator for table: {}", tableIdentifier, e);
-        throw new RuntimeException("Failed to plan scan tasks: " + e.getMessage(), e);
-      }
-
-      if (fileScanTasks.isEmpty()) {
-        LOG.info(
-            "Scan planning returned no tasks for table: {}. Table may be empty or fully filtered.",
-            tableIdentifier);
-      }
 
       PlanTableScanResponse response;
-      try {
-        response = buildCompletedPlanTableScanResponse(table, fileScanTasks);
-      } catch (Exception e) {
-        LOG.error("Failed to build scan plan response for table: {}", tableIdentifier, e);
-        throw new RuntimeException(
-            String.format(
-                "Failed to build scan plan response for table: %s. Error: %s",
-                tableIdentifier, e.getMessage()),
-            e);
+      if (cachedResponse.isPresent()) {
+        LOG.info("Using cached scan plan for table: {}", tableIdentifier);
+        response = cachedResponse.get();
+      } else {
+        List<FileScanTask> fileScanTasks = new ArrayList<>();
+
+        try (CloseableIterable<FileScanTask> scanTasks =
+            createFilePlanScanTasks(table, tableIdentifier, scanRequest)) {
+          for (FileScanTask fileScanTask : scanTasks) {
+            fileScanTasks.add(fileScanTask);
+          }
+        } catch (IOException e) {
+          LOG.error("Failed to close scan task iterator for table: {}", tableIdentifier, e);
+          throw new RuntimeException("Failed to plan scan tasks: " + e.getMessage(), e);
+        }
+
+        if (fileScanTasks.isEmpty()) {
+          LOG.info(
+              "Scan planning returned no tasks for table: {}. Table may be empty or fully filtered.",
+              tableIdentifier);
+        }
+
+        try {
+          response = buildCompletedPlanTableScanResponse(table, fileScanTasks);
+        } catch (Exception e) {
+          LOG.error("Failed to build scan plan response for table: {}", tableIdentifier, e);
+          throw new RuntimeException(
+              String.format(
+                  "Failed to build scan plan response for table: %s. Error: %s",
+                  tableIdentifier, e.getMessage()),
+              e);
+        }
+
+        scanPlanCache.put(ScanPlanCacheKey.create(tableIdentifier, table, scanRequest), response);
       }
 
-      // Cache the scan plan response
-      scanPlanCache.put(ScanPlanCacheKey.create(tableIdentifier, table, scanRequest), response);
+      if (requestCredentialVending && !isLocalOrHdfsLocation(table.location())) {
+        response = injectScanCredentials(tableIdentifier, table, response, privilege);
+      }
       return response;
 
     } catch (IllegalArgumentException e) {
@@ -459,6 +498,62 @@ public class CatalogWrapperForREST extends IcebergCatalogWrapper {
       LOG.error("Unexpected error during scan planning for table: {}", tableIdentifier, e);
       throw new RuntimeException(
           "Scan planning failed for table " + tableIdentifier + ": " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Fetch the scan tasks covered by a {@code plan-task} previously handed out by {@link
+   * #planTableScan}, completing the second step of the Iceberg REST two-step scan planning
+   * protocol.
+   *
+   * <p>{@link #planTableScan} currently returns every file scan task inline and hands out no {@code
+   * plan-tasks}, so no plan task presented here was issued by this server and every request is
+   * rejected as unknown. The endpoint is deliberately not advertised in {@code /v1/config} while
+   * that is the case, so a spec-compliant client never reaches it. Batching a plan into plan tasks,
+   * and redeeming them here, follows in a later change.
+   *
+   * @param tableIdentifier the table the plan task belongs to.
+   * @param request the request carrying the {@code plan-task}.
+   * @return the file scan tasks the plan task covers.
+   * @throws org.apache.iceberg.exceptions.NoSuchTableException if the table doesn't exist.
+   * @throws NoSuchPlanTaskException if the plan task was not issued for this table.
+   */
+  public FetchScanTasksResponse fetchScanTasks(
+      TableIdentifier tableIdentifier, FetchScanTasksRequest request) {
+    // Validate the table exists first, so a bad table reports 404 for the table rather than
+    // masking it as an unknown plan task. Consistent with planTableScan behavior.
+    getCatalog().loadTable(tableIdentifier);
+
+    LOG.info("Rejecting unknown plan task '{}' for table {}", request.planTask(), tableIdentifier);
+    throw new NoSuchPlanTaskException(
+        "Plan task %s was not issued for table %s", request.planTask(), tableIdentifier);
+  }
+
+  /**
+   * Inject vended credentials into a scan response using the already-loaded table, avoiding a
+   * redundant {@code loadTable} call. Follows the same eligibility logic as {@link
+   * #shouldGenerateCredential} and the same credential generation as {@link #getCredential}.
+   */
+  private PlanTableScanResponse injectScanCredentials(
+      TableIdentifier tableIdentifier,
+      Table table,
+      PlanTableScanResponse response,
+      CredentialPrivilege privilege) {
+    try {
+      validateCredentialLocation(table.location());
+      TableMetadata metadata = ((BaseTable) table).operations().current();
+      Credential credential = getCredential(metadata, privilege);
+      Map<String, String> config =
+          new HashMap<>(CredentialPropertyUtils.toIcebergProperties(credential));
+      config.putAll(
+          IcebergRESTUtils.buildRefreshProps(
+              catalogCredentialManager.catalogName(), tableIdentifier, config));
+      org.apache.iceberg.rest.credentials.Credential restCred =
+          IcebergRESTUtils.toRESTCredential(table.location(), config);
+      return IcebergRESTUtils.copyWithCredentials(response, Collections.singletonList(restCred));
+    } catch (ServiceUnavailableException e) {
+      LOG.warn("Failed to generate scan credentials for table: {}", tableIdentifier, e);
+      return response;
     }
   }
 

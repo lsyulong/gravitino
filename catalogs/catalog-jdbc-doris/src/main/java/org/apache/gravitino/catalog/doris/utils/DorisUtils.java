@@ -18,6 +18,9 @@
  */
 package org.apache.gravitino.catalog.doris.utils;
 
+import static org.apache.gravitino.catalog.jdbc.utils.JdbcConnectorUtils.escapeSqlLiteral;
+import static org.apache.gravitino.catalog.jdbc.utils.JdbcConnectorUtils.unescapeSqlLiteral;
+
 import com.google.common.collect.ImmutableList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -45,7 +48,7 @@ import org.slf4j.LoggerFactory;
 public final class DorisUtils {
   private static final Logger LOGGER = LoggerFactory.getLogger(DorisUtils.class);
   private static final Pattern PARTITION_INFO_PATTERN =
-      Pattern.compile("PARTITION BY \\b(LIST|RANGE)\\b\\((.+)\\)");
+      Pattern.compile("PARTITION BY \\b(LIST|RANGE)\\b\\s*\\((.+)\\)");
 
   private static final Pattern DISTRIBUTION_INFO_PATTERN =
       Pattern.compile(
@@ -65,7 +68,13 @@ public final class DorisUtils {
     StringBuilder sqlBuilder = new StringBuilder(" PROPERTIES (\n");
     sqlBuilder.append(
         properties.entrySet().stream()
-            .map(entry -> "\"" + entry.getKey() + "\"=\"" + entry.getValue() + "\"")
+            .map(
+                entry ->
+                    "\""
+                        + escapeSqlLiteral(entry.getKey(), '"')
+                        + "\"=\""
+                        + escapeSqlLiteral(entry.getValue(), '"')
+                        + "\"")
             .collect(Collectors.joining(",\n")));
     sqlBuilder.append("\n)");
     return sqlBuilder.toString();
@@ -76,7 +85,9 @@ public final class DorisUtils {
     String[] lines = createTableSql.split("\n");
 
     boolean isProperties = false;
-    final String sProperties = "\"(.*)\"\\s*=\\s*\"(.*)\",?";
+    // Escape alternatives exclude the closing delimiter, so no backtracking is needed.
+    final String sProperties =
+        "\"((?:\\\\.|\"\"|[^\"\\\\])*+)\"\\s*=\\s*\"((?:\\\\.|\"\"|[^\"\\\\])*+)\",?";
     final Pattern patternProperties = Pattern.compile(sProperties);
 
     for (String line : lines) {
@@ -87,8 +98,10 @@ public final class DorisUtils {
       if (isProperties) {
         final Matcher matcherProperties = patternProperties.matcher(line);
         if (matcherProperties.find()) {
-          final String key = matcherProperties.group(1).trim();
-          String value = matcherProperties.group(2).trim();
+          // generatePropertiesSql escapes keys and values for double-quoted literals, and SHOW
+          // CREATE echoes them escaped; unescape both so callers observe the original text.
+          final String key = unescapeSqlLiteral(matcherProperties.group(1), '"');
+          String value = unescapeSqlLiteral(matcherProperties.group(2), '"');
           properties.put(key, value);
         }
       }
@@ -160,11 +173,18 @@ public final class DorisUtils {
     if (Literals.NULL.equals(upper) && Literals.NULL.equals(lower)) {
       partitionValues = "LESS THAN MAXVALUE";
     } else if (Literals.NULL.equals(lower)) {
-      partitionValues = String.format("LESS THAN (\"%s\")", upper.value());
+      partitionValues =
+          String.format("LESS THAN (\"%s\")", escapeSqlLiteral(String.valueOf(upper.value()), '"'));
     } else if (Literals.NULL.equals(upper)) {
-      partitionValues = String.format("[(\"%s\"), (MAXVALUE))", lower.value());
+      partitionValues =
+          String.format(
+              "[(\"%s\"), (MAXVALUE))", escapeSqlLiteral(String.valueOf(lower.value()), '"'));
     } else {
-      partitionValues = String.format("[(\"%s\"), (\"%s\"))", lower.value(), upper.value());
+      partitionValues =
+          String.format(
+              "[(\"%s\"), (\"%s\"))",
+              escapeSqlLiteral(String.valueOf(lower.value()), '"'),
+              escapeSqlLiteral(String.valueOf(upper.value()), '"'));
     }
     return partitionValues;
   }
@@ -179,10 +199,10 @@ public final class DorisUtils {
             String.format(
                 "(%s)",
                 Arrays.stream(part)
-                    .map(p -> "\"" + p.value() + "\"")
+                    .map(p -> "\"" + escapeSqlLiteral(String.valueOf(p.value()), '"') + "\"")
                     .collect(Collectors.joining(",")));
       } else {
-        values = String.format("\"%s\"", part[0].value());
+        values = String.format("\"%s\"", escapeSqlLiteral(String.valueOf(part[0].value()), '"'));
       }
       listValues.add(values);
     }

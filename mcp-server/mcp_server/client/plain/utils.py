@@ -23,14 +23,24 @@ from mcp_server.client.plain.exception import GravitinoException
 
 
 def encode_path_segment(segment: str) -> str:
-    """URL-encode a single path segment, encoding all reserved characters."""
-    return quote(str(segment), safe="")
+    """Validate and URL-encode a single REST path segment."""
+    segment = str(segment)
+    # HTTP clients normalize dot segments, which can target another resource.
+    if segment in ("", ".", ".."):
+        raise ValueError("REST path names must not be empty, '.' or '..'")
+    return quote(segment, safe="")
 
 
 def extract_content_from_response(response, field: str, default="") -> str:
     response_json = response.json()
     _handle_gravitino_exception(response_json)
     return json.dumps(response_json.get(field, default))
+
+
+def extract_response(response) -> str:
+    response_json = response.json()
+    _handle_gravitino_exception(response_json)
+    return json.dumps(response_json)
 
 
 def _handle_gravitino_exception(response: dict):

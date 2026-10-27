@@ -35,8 +35,6 @@ import org.apache.gravitino.SupportsRelationOperations;
 import org.apache.gravitino.exceptions.NoSuchEntityException;
 import org.apache.gravitino.exceptions.NoSuchMetadataObjectException;
 import org.apache.gravitino.exceptions.NotFoundException;
-import org.apache.gravitino.lock.LockType;
-import org.apache.gravitino.lock.TreeLockUtils;
 import org.apache.gravitino.meta.GroupEntity;
 import org.apache.gravitino.meta.UserEntity;
 import org.apache.gravitino.utils.MetadataObjectUtil;
@@ -46,8 +44,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * OwnerManager is used for manage the owner of metadata object. The user and group don't have an
- * owner. Because the post hook will call the methods. We shouldn't add the lock of the metadata
- * object. Otherwise, it will cause deadlock.
+ * owner. It takes no tree lock: the entity store keeps one live owner per object and fences the
+ * object and the owner principal inside the owner write, which also lets the post hooks of create
+ * operations call it without lock ordering concerns.
  */
 public class OwnerManager implements OwnerDispatcher {
   private static final Logger LOG = LoggerFactory.getLogger(OwnerManager.class);
@@ -75,41 +74,29 @@ public class OwnerManager implements OwnerDispatcher {
       OwnerImpl newOwner = new OwnerImpl();
       if (ownerType == Owner.Type.USER) {
         NameIdentifier ownerIdent = AuthorizationUtils.ofUser(metalake, ownerName);
-        TreeLockUtils.doWithTreeLock(
-            ownerIdent,
-            LockType.READ,
-            () -> {
-              store
-                  .relationOperations()
-                  .insertRelation(
-                      SupportsRelationOperations.Type.OWNER_REL,
-                      objectIdent,
-                      MetadataObjectUtil.toEntityType(metadataObject),
-                      ownerIdent,
-                      Entity.EntityType.USER,
-                      true);
-              return null;
-            });
+        store
+            .relationOperations()
+            .insertRelation(
+                SupportsRelationOperations.Type.OWNER_REL,
+                objectIdent,
+                MetadataObjectUtil.toEntityType(metadataObject),
+                ownerIdent,
+                Entity.EntityType.USER,
+                true);
 
         newOwner.name = ownerName;
         newOwner.type = Owner.Type.USER;
       } else if (ownerType == Owner.Type.GROUP) {
         NameIdentifier ownerIdent = AuthorizationUtils.ofGroup(metalake, ownerName);
-        TreeLockUtils.doWithTreeLock(
-            ownerIdent,
-            LockType.READ,
-            () -> {
-              store
-                  .relationOperations()
-                  .insertRelation(
-                      SupportsRelationOperations.Type.OWNER_REL,
-                      objectIdent,
-                      MetadataObjectUtil.toEntityType(metadataObject),
-                      ownerIdent,
-                      Entity.EntityType.GROUP,
-                      true);
-              return null;
-            });
+        store
+            .relationOperations()
+            .insertRelation(
+                SupportsRelationOperations.Type.OWNER_REL,
+                objectIdent,
+                MetadataObjectUtil.toEntityType(metadataObject),
+                ownerIdent,
+                Entity.EntityType.GROUP,
+                true);
 
         newOwner.name = ownerName;
         newOwner.type = Owner.Type.GROUP;
@@ -130,7 +117,7 @@ public class OwnerManager implements OwnerDispatcher {
           nse, "Metadata object %s or owner %s is not found", metadataObject.fullName(), ownerName);
     } catch (IOException ioe) {
       LOG.info(
-          "Fail to set the owner {} of metadata object {}",
+          "Failed to set the owner {} of metadata object {}",
           ownerName,
           metadataObject.fullName(),
           ioe);
@@ -183,21 +170,15 @@ public class OwnerManager implements OwnerDispatcher {
     }
 
     try {
-      TreeLockUtils.doWithTreeLock(
-          ownerIdent,
-          LockType.READ,
-          () -> {
-            store
-                .relationOperations()
-                .batchInsertRelations(
-                    SupportsRelationOperations.Type.OWNER_REL,
-                    owned,
-                    objectType,
-                    ownerIdent,
-                    ownerEntityType,
-                    true);
-            return null;
-          });
+      store
+          .relationOperations()
+          .batchInsertRelations(
+              SupportsRelationOperations.Type.OWNER_REL,
+              owned,
+              objectType,
+              ownerIdent,
+              ownerEntityType,
+              true);
 
       // Owner relations are already persisted; a failure for one plugin notification must not
       // abort the remaining notifications and leave the batch half-notified.
@@ -210,7 +191,7 @@ public class OwnerManager implements OwnerDispatcher {
               mo,
               authorizationPlugin ->
                   authorizationPlugin.onOwnerSet(mo, originOwner.orElse(null), newOwner));
-          originOwner.ifPresent(owner -> notifyOwnerChange(owner, metalake, mo));
+          notifyOwnerChange(originOwner.orElse(null), metalake, mo);
         } catch (RuntimeException re) {
           LOG.warn(
               "Failed to notify authorization plugin for metadata object {} during batch setOwners",
@@ -225,7 +206,8 @@ public class OwnerManager implements OwnerDispatcher {
           nse.getMessage());
       throw new NotFoundException(nse, "Metadata object or owner %s is not found", ownerName);
     } catch (IOException ioe) {
-      LOG.warn("Fail to batch set owner {} on {} objects", ownerName, metadataObjects.size(), ioe);
+      LOG.warn(
+          "Failed to batch set owner {} on {} objects", ownerName, metadataObjects.size(), ioe);
       throw new RuntimeException(ioe);
     }
   }
@@ -298,16 +280,12 @@ public class OwnerManager implements OwnerDispatcher {
     OwnerImpl owner = new OwnerImpl();
     try {
       List<? extends Entity> entities =
-          TreeLockUtils.doWithTreeLock(
-              ident,
-              LockType.READ,
-              () ->
-                  store
-                      .relationOperations()
-                      .listEntitiesByRelation(
-                          SupportsRelationOperations.Type.OWNER_REL,
-                          ident,
-                          MetadataObjectUtil.toEntityType(metadataObject)));
+          store
+              .relationOperations()
+              .listEntitiesByRelation(
+                  SupportsRelationOperations.Type.OWNER_REL,
+                  ident,
+                  MetadataObjectUtil.toEntityType(metadataObject));
 
       if (entities.isEmpty()) {
         return Optional.empty();
@@ -339,7 +317,7 @@ public class OwnerManager implements OwnerDispatcher {
       throw new NoSuchMetadataObjectException(
           "The metadata object of %s isn't found", metadataObject.fullName());
     } catch (IOException ioe) {
-      LOG.info("Fail to get the owner of entity {}", metadataObject.fullName(), ioe);
+      LOG.info("Failed to get the owner of entity {}", metadataObject.fullName(), ioe);
       throw new RuntimeException(ioe);
     }
   }

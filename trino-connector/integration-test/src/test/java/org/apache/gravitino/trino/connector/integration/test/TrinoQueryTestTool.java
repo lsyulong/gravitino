@@ -99,7 +99,10 @@ public class TrinoQueryTestTool {
               + "otherwise fall back to a single-node setup with combined coordinator-worker roles.");
 
       options.addOption(
-          "trino_version", true, "Specify the Trino version to test, the default value is 435.");
+          "trino_version",
+          true,
+          "Specify the Trino version to test. If not specified, the version pinned in the test "
+              + "docker-compose file is used.");
 
       options.addOption(
           "trino_connector_dir",
@@ -107,6 +110,11 @@ public class TrinoQueryTestTool {
           "Specify the Gravitino connector JAR path. "
               + "The JAR file under ${trino_connector_dir} will be copied into the test image, "
               + "the default value is ${project_root}/trino-connector/trino-connector/build/libs.");
+
+      options.addOption(
+          "test_containers",
+          true,
+          "Specify the docker compose test containers to start, the default value is 'default'.");
 
       options.addOption(
           "env_only",
@@ -128,7 +136,7 @@ public class TrinoQueryTestTool {
                 + "Run all the testers in the 'testsets' directory with a distributed cluster:\n"
                 + "TrinoTestTool --auto=all --trino_worker_num=3\n\n"
                 + "Run all the testers in the 'testsets' directory with specific trino version:\n"
-                + "TrinoTestTool --auto=all --trino_version=435\n\n"
+                + "TrinoTestTool --auto=all --trino_version=440\n\n"
                 + "Run all the testers in the 'testsets' directory with specific trino connector JAR files:\n"
                 + "TrinoTestTool --auto=all --trino_connector_dir=./trino-connector/libs\n\n"
                 + "Run all the tpch testset's testers in the 'testsets/tpch' directory:\n"
@@ -258,6 +266,7 @@ public class TrinoQueryTestTool {
       TrinoQueryIT.trinoWorkerNum = extractIntValue(commandLine, "trino_worker_num");
       TrinoQueryIT.trinoVersion = extractIntValue(commandLine, "trino_version");
       TrinoQueryIT.trinoConnectorDir = commandLine.getOptionValue("trino_connector_dir");
+      TrinoQueryIT.testContainers = commandLine.getOptionValue("test_containers");
 
       checkEnv();
 
