@@ -101,6 +101,107 @@ public class TestTagMetaService extends TestJDBCBackend {
 
   private final Map<String, String> props = ImmutableMap.of("k1", "v1");
 
+  /** Verifies membership lookups against live stored tags and object lifecycles. */
+  @TestTemplate
+  public void testMetadataObjectLookupByStableTagId() throws IOException {
+    BaseMetalake metalake =
+        createBaseMakeLake(RandomIdGenerator.INSTANCE.nextId(), METALAKE_NAME, AUDIT_INFO);
+    backend.insert(metalake, false);
+    CatalogEntity catalog =
+        createCatalog(
+            RandomIdGenerator.INSTANCE.nextId(),
+            Namespace.of(METALAKE_NAME),
+            "catalog",
+            AUDIT_INFO);
+    backend.insert(catalog, false);
+    TagEntity tag =
+        TagEntity.builder()
+            .withId(RandomIdGenerator.INSTANCE.nextId())
+            .withName("dept")
+            .withNamespace(NamespaceUtil.ofTag(METALAKE_NAME))
+            .withProperties(ImmutableMap.of())
+            .withAuditInfo(AUDIT_INFO)
+            .build();
+    backend.insert(tag, false);
+    TagMetaService service = TagMetaService.getInstance();
+    service.associateTagValuesWithMetadataObject(
+        catalog.nameIdentifier(),
+        Entity.EntityType.CATALOG,
+        new TagValue[] {TagValue.of("dept", "Finance"), TagValue.of("dept", "finance")},
+        new TagValue[0]);
+    assertEquals(
+        1, service.listAssociatedMetadataObjectsForTagId(METALAKE_NAME, tag.id(), null).size());
+    assertEquals(
+        1,
+        service.listAssociatedMetadataObjectsForTagId(METALAKE_NAME, tag.id(), "Finance").size());
+    assertEquals(
+        1,
+        service.listAssociatedMetadataObjectsForTagId(METALAKE_NAME, tag.id(), "finance").size());
+    assertTrue(
+        service
+            .listAssociatedMetadataObjectsForTagId(METALAKE_NAME, tag.id(), "FINANCE")
+            .isEmpty());
+    assertTrue(service.listAssociatedMetadataObjectsForTagId("other", tag.id(), null).isEmpty());
+    List<GenericEntity> objects =
+        backend.listEntitiesByRelation(RelationQuery.forTagId(METALAKE_NAME, tag.id(), null));
+    assertEquals(catalog.id(), objects.get(0).id());
+    backend.delete(tag.nameIdentifier(), Entity.EntityType.TAG, false);
+    TagEntity recreated =
+        TagEntity.builder()
+            .withId(RandomIdGenerator.INSTANCE.nextId())
+            .withName("dept")
+            .withNamespace(NamespaceUtil.ofTag(METALAKE_NAME))
+            .withProperties(ImmutableMap.of())
+            .withAuditInfo(AUDIT_INFO)
+            .build();
+    backend.insert(recreated, false);
+    service.associateTagValuesWithMetadataObject(
+        catalog.nameIdentifier(),
+        Entity.EntityType.CATALOG,
+        new TagValue[] {TagValue.of("dept", "finance")},
+        new TagValue[0]);
+    assertTrue(
+        service.listAssociatedMetadataObjectsForTagId(METALAKE_NAME, tag.id(), null).isEmpty());
+    assertTrue(
+        service
+            .listAssociatedMetadataObjectsForTagId(METALAKE_NAME, tag.id(), "finance")
+            .isEmpty());
+    assertEquals(
+        1,
+        service.listAssociatedMetadataObjectsForTagId(METALAKE_NAME, recreated.id(), null).size());
+  }
+
+  /** Legacy dotted object names remain readable by single and batch relation queries. */
+  @TestTemplate
+  public void testReadTagsForLegacyDottedNames() throws IOException {
+    createAndInsertMakeLake(METALAKE_NAME);
+    TagEntity tag = createAndInsertTagEntity("legacy.tag", "", METALAKE_NAME);
+    PolicyEntity policy =
+        createPolicy(
+            RandomIdGenerator.INSTANCE.nextId(),
+            NamespaceUtil.ofPolicy(METALAKE_NAME),
+            "legacy.policy",
+            AUDIT_INFO);
+    backend.insert(policy, false);
+    TagMetaService service = TagMetaService.getInstance();
+    Map<NameIdentifier, Entity.EntityType> objects =
+        Map.of(
+            tag.nameIdentifier(), Entity.EntityType.TAG,
+            policy.nameIdentifier(), Entity.EntityType.POLICY);
+    for (Map.Entry<NameIdentifier, Entity.EntityType> object : objects.entrySet()) {
+      assertTrue(service.listTagsForMetadataObject(object.getKey(), object.getValue()).isEmpty());
+      assertTrue(
+          service
+              .listTagsForMetadataObjects(List.of(object.getKey()), object.getValue())
+              .isEmpty());
+      Assertions.assertThrows(
+          NoSuchEntityException.class,
+          () ->
+              service.getTagForMetadataObject(
+                  object.getKey(), object.getValue(), tag.nameIdentifier()));
+    }
+  }
+
   /** Verifies a deleted ID is rejected permanently instead of producing a retryable conflict. */
   @TestTemplate
   public void testOverwriteRejectsDeletedTagId() throws IOException {
