@@ -191,15 +191,19 @@ public interface DomainDispatcher {
       throws NoSuchDomainException, DomainAlreadyExistsException, IllegalArgumentException;
 
   /**
-   * Deletes a domain, with its parent edge.
+   * Deletes a draft domain, with its parent edge. A published domain must be unpublished first. The
+   * status is checked before the sub-domains, so deleting a published domain with sub-domains
+   * throws {@link IllegalArgumentException}.
    *
    * @param metalake The name of the metalake.
    * @param name The name of the domain.
    * @return True if the domain is deleted, false if it does not exist.
    * @throws NoSuchMetalakeException If the metalake does not exist.
-   * @throws NonEmptyDomainException If the domain has sub-domains.
+   * @throws IllegalArgumentException If the domain is published.
+   * @throws NonEmptyDomainException If the domain is a draft with sub-domains.
    */
-  boolean deleteDomain(String metalake, String name) throws NonEmptyDomainException;
+  boolean deleteDomain(String metalake, String name)
+      throws IllegalArgumentException, NonEmptyDomainException;
 
   /**
    * Publishes a domain. Publishing a published domain changes nothing.
@@ -276,13 +280,12 @@ public interface DomainDispatcher {
   DomainEntity[] listSubdomainInfos(String metalake, String name) throws NoSuchDomainException;
 
   /**
-   * Lists recorded leaf objects in a domain's scope, with every applicable relation. Results are
-   * unfiltered; server callers apply domain visibility and metadata access checks.
+   * Lists members in a domain's scope, with every applicable relation. Server callers apply domain
+   * visibility and metadata access checks.
    *
-   * <p>This operation is unpaginated. Catalog and schema assignments enumerate recorded leaf
-   * objects, and each candidate requires effective-tag resolution, including ancestor lookups and
-   * object existence checks. Query work grows with the candidate count and schema depth; type and
-   * name filters do not impose a bound on the number of objects enumerated.
+   * <p>The default listing returns directly tagged objects, including catalogs and schemas. With
+   * expansion enabled, catalog and schema assignments enumerate recorded leaves and resolve their
+   * effective tags. Both modes return an unpaginated result.
    *
    * @param metalake The metalake name.
    * @param name The listed domain.

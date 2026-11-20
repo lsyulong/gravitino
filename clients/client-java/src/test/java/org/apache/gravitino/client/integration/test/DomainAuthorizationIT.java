@@ -51,7 +51,6 @@ import org.apache.gravitino.exceptions.NoSuchTagException;
 import org.apache.gravitino.rel.Column;
 import org.apache.gravitino.rel.Table;
 import org.apache.gravitino.rel.types.Types;
-import org.apache.gravitino.tag.TagValue;
 import org.junit.jupiter.api.Test;
 
 /** SDK tests with simple authentication, real owners, role grants, denies and Casbin. */
@@ -64,10 +63,8 @@ public class DomainAuthorizationIT extends DomainIT {
 
   @Test
   void testVisibilityInheritedPermissionsAndDenyPrecedence() {
-    Domain parent =
-        metalake.createDomain("Parent_auth_scope", null, null, TagValue.noValue("parent"), true);
-    Domain child =
-        parent.createSubdomain("Child_auth_scope", null, null, TagValue.noValue("child"), true);
+    Domain parent = metalake.createDomain("Parent_auth_scope", null, null, "parent", true);
+    Domain child = parent.createSubdomain("Child_auth_scope", null, null, "child", true);
     for (String user : List.of("reader", "manager", "outsider", "owner", "lake_manager")) {
       metalake.addUser(user);
     }
@@ -139,39 +136,33 @@ public class DomainAuthorizationIT extends DomainIT {
       GravitinoMetalake creator = creatorClient.loadMetalake(metalake.name());
       assertThrows(
           ForbiddenException.class,
-          () -> creator.createDomain("denied", null, null, TagValue.noValue("new tag"), true));
+          () -> creator.createDomain("denied", null, null, "new tag", true));
 
       // Creating a backing tag needs CREATE_TAG in addition to domain management.
       grant(
           "creator",
           List.of(
               SecurableObjects.ofMetalake(metalake.name(), List.of(Privileges.CreateTag.allow()))));
-      Domain created =
-          creator.createDomain("created", null, null, TagValue.noValue("owned tag"), true);
+      Domain created = creator.createDomain("created", null, null, "owned tag", true);
 
       // Domain management does not grant ownership of an unrelated tag.
       metalake.createTag("foreign tag", null, Collections.emptyMap());
+      assertThrows(ForbiddenException.class, () -> created.updateBackingTag("foreign tag"));
       assertThrows(
           ForbiddenException.class,
-          () -> created.updateBackingTag(TagValue.noValue("foreign tag")));
-      assertThrows(
-          ForbiddenException.class,
-          () ->
-              creator.createDomain("foreign", null, null, TagValue.noValue("foreign tag"), false));
+          () -> creator.createDomain("foreign", null, null, "foreign tag", false));
 
       metalake.setOwner(
           MetadataObjects.of(null, "foreign tag", MetadataObject.Type.TAG),
           "creator",
           Owner.Type.USER);
-      Domain bound =
-          creator.createDomain("bound", null, null, TagValue.noValue("foreign tag"), false);
-      assertEquals(TagValue.noValue("foreign tag"), bound.backingTag().orElseThrow());
+      Domain bound = creator.createDomain("bound", null, null, "foreign tag", false);
+      assertEquals("foreign tag", bound.backingTag().orElseThrow());
       assertTrue(bound.updateBackingTag(null).backingTag().isEmpty());
-      created.updateBackingTag(TagValue.noValue("foreign tag"));
+      created.updateBackingTag("foreign tag");
       assertThrows(
           BackingTagAlreadyBoundException.class,
-          () ->
-              creator.createDomain("conflict", null, null, TagValue.noValue("foreign tag"), false));
+          () -> creator.createDomain("conflict", null, null, "foreign tag", false));
     }
   }
 
@@ -187,10 +178,8 @@ public class DomainAuthorizationIT extends DomainIT {
     catalog
         .asTableCatalog()
         .createTable(NameIdentifier.of("schema", "hidden"), columns, "", Collections.emptyMap());
-    Domain parent =
-        metalake.createDomain("access_parent", null, null, TagValue.noValue("parent tag"), true);
-    Domain child =
-        parent.createSubdomain("access_child", null, null, TagValue.noValue("child tag"), true);
+    Domain parent = metalake.createDomain("access_parent", null, null, "parent tag", true);
+    Domain child = parent.createSubdomain("access_child", null, null, "child tag", true);
     parent.publish();
     catalog
         .asSchemas()
@@ -220,7 +209,9 @@ public class DomainAuthorizationIT extends DomainIT {
     try (GravitinoAdminClient readerClient = userClient("object_reader")) {
       GravitinoMetalake reader = readerClient.loadMetalake(metalake.name());
       DomainMember[] visible =
-          reader.getDomain(parent.name()).listMembers(DomainMemberFilter.builder().build());
+          reader
+              .getDomain(parent.name())
+              .listMembers(DomainMemberFilter.builder().withExpand(true).build());
       assertEquals(1, visible.length);
       assertEquals("ice.schema.orders", visible[0].object().fullName());
       assertEquals(DomainRelation.Type.INHERITED, visible[0].relations()[0].type());
@@ -233,12 +224,16 @@ public class DomainAuthorizationIT extends DomainIT {
           0,
           reader
               .getDomain(parent.name())
-              .listMembers(DomainMemberFilter.builder().withDomains(child.name()).build())
+              .listMembers(
+                  DomainMemberFilter.builder().withExpand(true).withDomains(child.name()).build())
               .length);
 
       // The draft child must not contribute a roll-up relation before publication.
       child.publish();
-      visible = reader.getDomain(parent.name()).listMembers(DomainMemberFilter.builder().build());
+      visible =
+          reader
+              .getDomain(parent.name())
+              .listMembers(DomainMemberFilter.builder().withExpand(true).build());
       assertEquals(
           Set.of(DomainRelation.Type.INHERITED, DomainRelation.Type.VIA_SUBDOMAIN),
           Arrays.stream(visible[0].relations())
@@ -255,7 +250,9 @@ public class DomainAuthorizationIT extends DomainIT {
       // A visible object's hidden child relation must disappear without hiding parent membership.
       grant("object_reader", List.of(scope(child.name(), Privileges.UseDomain.deny())));
       DomainMember[] parentOnly =
-          reader.getDomain(parent.name()).listMembers(DomainMemberFilter.builder().build());
+          reader
+              .getDomain(parent.name())
+              .listMembers(DomainMemberFilter.builder().withExpand(true).build());
       assertEquals(1, parentOnly.length);
       assertEquals(1, parentOnly[0].relations().length);
       assertEquals(DomainRelation.Type.INHERITED, parentOnly[0].relations()[0].type());
@@ -270,21 +267,20 @@ public class DomainAuthorizationIT extends DomainIT {
                   schemaScope, "orders", List.of(Privileges.SelectTable.deny()))));
       assertEquals(
           0,
-          reader.getDomain(parent.name()).listMembers(DomainMemberFilter.builder().build()).length);
+          reader
+              .getDomain(parent.name())
+              .listMembers(DomainMemberFilter.builder().withExpand(true).build())
+              .length);
       assertThrows(ForbiddenException.class, () -> readerTable.supportsDomains().listDomains());
     }
   }
 
   @Test
   void testMoveReevaluatesParentGrantsAndMetalakeOwnership() {
-    Domain first =
-        metalake.createDomain("first", null, null, TagValue.noValue("first tag"), true).publish();
-    Domain second =
-        metalake.createDomain("second", null, null, TagValue.noValue("second tag"), true).publish();
+    Domain first = metalake.createDomain("first", null, null, "first tag", true).publish();
+    Domain second = metalake.createDomain("second", null, null, "second tag", true).publish();
     Domain child =
-        first
-            .createSubdomain("moving_child_name", null, null, TagValue.noValue("moving tag"), true)
-            .publish();
+        first.createSubdomain("moving_child_name", null, null, "moving tag", true).publish();
     metalake.addUser("moving_manager");
     metalake.addUser("lake_owner");
     grant("moving_manager", List.of(scope(first.name(), Privileges.ManageDomain.allow())));
@@ -324,23 +320,14 @@ public class DomainAuthorizationIT extends DomainIT {
   @Test
   void testWriteEndpointsRejectReadersAndExplicitManagementDenies() {
     Domain parent =
-        metalake
-            .createDomain("matrix-parent", null, null, TagValue.noValue("matrix-parent-tag"), true)
-            .publish();
+        metalake.createDomain("matrix-parent", null, null, "matrix-parent-tag", true).publish();
     Domain child =
-        parent
-            .createSubdomain("matrix-child", null, null, TagValue.noValue("matrix-child-tag"), true)
-            .publish();
+        parent.createSubdomain("matrix-child", null, null, "matrix-child-tag", true).publish();
     Domain target =
-        metalake
-            .createDomain("matrix-target", null, null, TagValue.noValue("matrix-target-tag"), true)
-            .publish();
+        metalake.createDomain("matrix-target", null, null, "matrix-target-tag", true).publish();
 
     Domain creationParent =
-        metalake
-            .createDomain(
-                "creation-parent", null, null, TagValue.noValue("creation-parent-tag"), true)
-            .publish();
+        metalake.createDomain("creation-parent", null, null, "creation-parent-tag", true).publish();
 
     for (String user : List.of("matrix_reader", "matrix_denied")) {
       metalake.addUser(user);
@@ -365,7 +352,8 @@ public class DomainAuthorizationIT extends DomainIT {
         Domain snapshot = reader.getDomain(child.name());
         // USE_DOMAIN keeps reads available even when management is explicitly denied.
         assertEquals(child.name(), snapshot.name());
-        assertEquals(0, snapshot.listMembers(DomainMemberFilter.builder().build()).length);
+        assertEquals(
+            0, snapshot.listMembers(DomainMemberFilter.builder().withExpand(true).build()).length);
         assertEquals(0, snapshot.listSubdomains().length);
         assertEquals(0, snapshot.listSubdomainsInfo().length);
         assertThrows(
@@ -383,15 +371,12 @@ public class DomainAuthorizationIT extends DomainIT {
             () ->
                 reader
                     .getDomain(creationParent.name())
-                    .createSubdomain(
-                        "denied-subdomain", null, null, TagValue.noValue("denied-tag"), true),
+                    .createSubdomain("denied-subdomain", null, null, "denied-tag", true),
             user);
         if (user.equals("matrix_reader")) {
           assertThrows(
               ForbiddenException.class,
-              () ->
-                  reader.createDomain(
-                      "denied-domain", null, null, TagValue.noValue("denied-create-tag"), true));
+              () -> reader.createDomain("denied-domain", null, null, "denied-create-tag", true));
         }
       }
 
@@ -415,28 +400,15 @@ public class DomainAuthorizationIT extends DomainIT {
   @Test
   void testNonOwnerManagerCanUseWriteEndpoints() {
     Domain parent =
-        metalake
-            .createDomain(
-                "allowed-parent", null, null, TagValue.noValue("allowed-parent-tag"), true)
-            .publish();
+        metalake.createDomain("allowed-parent", null, null, "allowed-parent-tag", true).publish();
     Domain target =
-        metalake
-            .createDomain(
-                "allowed-target", null, null, TagValue.noValue("allowed-target-tag"), true)
-            .publish();
+        metalake.createDomain("allowed-target", null, null, "allowed-target-tag", true).publish();
     Domain child =
-        parent
-            .createSubdomain(
-                "allowed-child", null, null, TagValue.noValue("allowed-child-tag"), true)
-            .publish();
+        parent.createSubdomain("allowed-child", null, null, "allowed-child-tag", true).publish();
     Domain creationParent =
         metalake
             .createDomain(
-                "allowed-creation-parent",
-                null,
-                null,
-                TagValue.noValue("allowed-creation-parent-tag"),
-                true)
+                "allowed-creation-parent", null, null, "allowed-creation-parent-tag", true)
             .publish();
     metalake.addUser("allowed_manager");
     grant(
@@ -463,24 +435,19 @@ public class DomainAuthorizationIT extends DomainIT {
       assertEquals(target.name(), managed.attachToParent(target.name()).parent().orElseThrow());
       assertTrue(managed.detachFromParent().parent().isEmpty());
       assertEquals(
-          TagValue.noValue("manager-binding-tag"),
-          managed
-              .updateBackingTag(TagValue.noValue("manager-binding-tag"))
-              .backingTag()
-              .orElseThrow());
+          "manager-binding-tag",
+          managed.updateBackingTag("manager-binding-tag").backingTag().orElseThrow());
       assertTrue(managed.updateBackingTag(null).backingTag().isEmpty());
 
       // Legal creation requests also succeed when both management and tag creation are allowed.
-      Domain created =
-          manager.createDomain(
-              "denied-domain", null, null, TagValue.noValue("denied-create-tag"), true);
+      Domain created = manager.createDomain("denied-domain", null, null, "denied-create-tag", true);
       Domain subdomain =
           manager
               .getDomain(creationParent.name())
-              .createSubdomain(
-                  "denied-subdomain", null, null, TagValue.noValue("denied-tag"), true);
+              .createSubdomain("denied-subdomain", null, null, "denied-tag", true);
       assertEquals(creationParent.name(), subdomain.parent().orElseThrow());
       assertEquals(created.name(), manager.getDomain(created.name()).name());
+      assertEquals(Domain.Status.DRAFT, managed.unpublish().status());
       assertTrue(manager.deleteDomain(child.name()));
       assertThrows(NoSuchDomainException.class, () -> metalake.getDomain(child.name()));
     }

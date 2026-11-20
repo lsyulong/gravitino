@@ -164,7 +164,14 @@ public class TestDomainManager {
   @AfterEach
   public void cleanUp() throws IOException {
     DomainEntity[] domains = domainManager.listDomainInfos(METALAKE);
-    // Sub-domains first, since a domain with sub-domains cannot be deleted.
+    // Only drafts can be deleted. Sub-domains first, since a domain with published sub-domains
+    // cannot be unpublished and a domain with sub-domains cannot be deleted.
+    Arrays.stream(domains)
+        .filter(domain -> domain.parent().isPresent())
+        .forEach(domain -> domainManager.unpublishDomain(METALAKE, domain.name()));
+    Arrays.stream(domains)
+        .filter(domain -> !domain.parent().isPresent())
+        .forEach(domain -> domainManager.unpublishDomain(METALAKE, domain.name()));
     Arrays.stream(domains)
         .filter(domain -> domain.parent().isPresent())
         .forEach(domain -> domainManager.deleteDomain(METALAKE, domain.name()));
@@ -240,7 +247,10 @@ public class TestDomainManager {
             .when(() -> MetadataObjectUtil.checkMetadataObject(METALAKE, leaf))
             .thenAnswer(call -> null);
         DomainMemberFilter filter =
-            DomainMemberFilter.builder().withTypes(MetadataObject.Type.TABLE).build();
+            DomainMemberFilter.builder()
+                .withExpand(true)
+                .withTypes(MetadataObject.Type.TABLE)
+                .build();
         DomainMember[] members = domainManager.listMembers(METALAKE, "Finance", filter);
         Assertions.assertEquals(1, members.length);
         Assertions.assertEquals(leaf, members[0].object());
@@ -399,7 +409,8 @@ public class TestDomainManager {
             .when(() -> MetadataObjectUtil.checkMetadataObject(METALAKE, leaf))
             .thenAnswer(call -> null);
         DomainMember[] members =
-            domainManager.listMembers(METALAKE, "Finance", DomainMemberFilter.builder().build());
+            domainManager.listMembers(
+                METALAKE, "Finance", DomainMemberFilter.builder().withExpand(true).build());
         Assertions.assertEquals(1, members.length);
         Assertions.assertArrayEquals(
             new DomainRelation[] {
@@ -410,17 +421,73 @@ public class TestDomainManager {
             members[0].relations());
         Assertions.assertEquals(
             2, domainManager.listDomainsForMetadataObject(METALAKE, leaf).length);
+
+        // Without expansion the tagged catalog is listed once, and the valued HR binding does
+        // not match the catalog's finance assignment.
+        MetadataObject catalogObject =
+            MetadataObjects.parse(catalogName, MetadataObject.Type.CATALOG);
+        DomainMember[] direct =
+            domainManager.listMembers(METALAKE, "Finance", DomainMemberFilter.builder().build());
+        Assertions.assertArrayEquals(
+            new MetadataObject[] {catalogObject, leaf},
+            Arrays.stream(direct).map(DomainMember::object).toArray(MetadataObject[]::new));
+        Assertions.assertArrayEquals(
+            new DomainRelation[] {DomainRelation.direct()}, direct[0].relations());
+        Assertions.assertArrayEquals(
+            new DomainRelation[] {DomainRelation.viaSubdomain("Trading")}, direct[1].relations());
+        Assertions.assertEquals(
+            0,
+            domainManager.listMembers(METALAKE, "HR", DomainMemberFilter.builder().build()).length);
+        // The direct query filters out the catalog, while expansion still needs it as a source.
+        DomainMemberFilter modelsOnly =
+            DomainMemberFilter.builder().withTypes(MetadataObject.Type.MODEL).build();
+        Assertions.assertEquals(
+            0, domainManager.listMembers(METALAKE, "Finance", modelsOnly).length);
+        DomainMemberFilter tablesOnly =
+            DomainMemberFilter.builder().withTypes(MetadataObject.Type.TABLE).build();
+        DomainMember[] tables = domainManager.listMembers(METALAKE, "Finance", tablesOnly);
+        Assertions.assertEquals(1, tables.length);
+        Assertions.assertEquals(leaf, tables[0].object());
+        Assertions.assertArrayEquals(
+            new DomainRelation[] {DomainRelation.viaSubdomain("Trading")}, tables[0].relations());
+        DomainMember[] expandedTables =
+            domainManager.listMembers(
+                METALAKE,
+                "Finance",
+                DomainMemberFilter.builder()
+                    .withTypes(MetadataObject.Type.TABLE)
+                    .withExpand(true)
+                    .build());
+        Assertions.assertEquals(1, expandedTables.length);
+        Assertions.assertArrayEquals(members[0].relations(), expandedTables[0].relations());
         assignMembershipTag(table.nameIdentifier(), Entity.EntityType.TABLE, "dept", "hr");
+        DomainMember[] tradingMembers =
+            domainManager.listMembers(
+                METALAKE, "Finance", DomainMemberFilter.builder().withDomains("Trading").build());
+        Assertions.assertEquals(1, tradingMembers.length);
+        Assertions.assertEquals(leaf, tradingMembers[0].object());
         Assertions.assertArrayEquals(
             new DomainRelation[] {DomainRelation.viaSubdomain("Trading")},
-            domainManager.listMembers(METALAKE, "Finance", DomainMemberFilter.builder().build())[0]
+            tradingMembers[0].relations());
+        DomainMember[] hrMembers =
+            domainManager.listMembers(METALAKE, "HR", DomainMemberFilter.builder().build());
+        Assertions.assertEquals(1, hrMembers.length);
+        Assertions.assertEquals(leaf, hrMembers[0].object());
+        Assertions.assertArrayEquals(
+            new DomainRelation[] {DomainRelation.direct()}, hrMembers[0].relations());
+        Assertions.assertArrayEquals(
+            new DomainRelation[] {DomainRelation.viaSubdomain("Trading")},
+            domainManager
+                .listMembers(
+                    METALAKE, "Finance", DomainMemberFilter.builder().withExpand(true).build())[0]
                 .relations());
         Assertions.assertEquals(
             3, domainManager.listDomainsForMetadataObject(METALAKE, leaf).length);
         domainManager.detachDomain(METALAKE, "Trading");
         Assertions.assertEquals(
             0,
-            domainManager.listMembers(METALAKE, "Finance", DomainMemberFilter.builder().build())
+            domainManager.listMembers(
+                    METALAKE, "Finance", DomainMemberFilter.builder().withExpand(true).build())
                 .length);
         Assertions.assertEquals(
             2, domainManager.listDomainsForMetadataObject(METALAKE, leaf).length);
@@ -435,7 +502,8 @@ public class TestDomainManager {
             0, domainManager.listDomainsForMetadataObject(METALAKE, leaf).length);
         Assertions.assertEquals(
             0,
-            domainManager.listMembers(METALAKE, "Finance", DomainMemberFilter.builder().build())
+            domainManager.listMembers(
+                    METALAKE, "Finance", DomainMemberFilter.builder().withExpand(true).build())
                 .length);
         // The original binding survives a tag deletion but never follows a recreated name.
         Assertions.assertEquals(
@@ -599,6 +667,31 @@ public class TestDomainManager {
     Assertions.assertTrue(domainManager.deleteDomain(METALAKE, "Finance"));
     Assertions.assertFalse(domainManager.deleteDomain(METALAKE, "Finance"));
     Assertions.assertEquals(0, domainManager.listDomains(METALAKE).length);
+  }
+
+  @Test
+  public void testDeleteChecksStatus() {
+    domainManager.createDomain(METALAKE, "Finance", null, null, TagValue.noValue("Finance"), true);
+    domainManager.publishDomain(METALAKE, "Finance");
+
+    // A published domain must be unpublished before it is deleted.
+    IllegalArgumentException e =
+        Assertions.assertThrows(
+            IllegalArgumentException.class, () -> domainManager.deleteDomain(METALAKE, "Finance"));
+    Assertions.assertTrue(e.getMessage().contains("unpublish it first"), e.getMessage());
+    Assertions.assertEquals(
+        Domain.Status.PUBLISHED, domainManager.getDomain(METALAKE, "Finance").status());
+
+    // The status is checked before the sub-domains.
+    domainManager.createSubdomain(
+        METALAKE, "Finance", "Trading", null, null, TagValue.noValue("Trading"), true);
+    Assertions.assertThrows(
+        IllegalArgumentException.class, () -> domainManager.deleteDomain(METALAKE, "Finance"));
+    Assertions.assertTrue(domainManager.deleteDomain(METALAKE, "Trading"));
+
+    domainManager.unpublishDomain(METALAKE, "Finance");
+    Assertions.assertTrue(domainManager.deleteDomain(METALAKE, "Finance"));
+    Assertions.assertFalse(domainManager.deleteDomain(METALAKE, "Finance"));
   }
 
   @Test
@@ -893,11 +986,6 @@ public class TestDomainManager {
         IllegalArgumentException.class,
         () ->
             domainManager.createDomain(
-                METALAKE, "Markets", null, null, TagValue.noValue("dept"), false));
-    Assertions.assertThrows(
-        IllegalArgumentException.class,
-        () ->
-            domainManager.createDomain(
                 METALAKE, "Markets", null, null, TagValue.of("plain", "v"), false));
 
     // A value backs one domain, and valued and valueless bindings of a tag are never mixed.
@@ -929,6 +1017,51 @@ public class TestDomainManager {
             .createDomain(METALAKE, "Markets", null, null, TagValue.of("dept", "markets"), false)
             .backingTag()
             .orElse(null));
+  }
+
+  @Test
+  public void testBindTagWithAllowedValuesWithoutValue() throws IOException {
+    createTag("region", TagValueConstraint.ofAllowedValues("emea", "apac"));
+    createTag("dept", TagValueConstraint.ofAllowedValues("finance", "markets"));
+
+    // A tag that requires values on assignments can still back a domain without a value.
+    DomainEntity emea =
+        domainManager.createDomain(METALAKE, "Emea", null, null, TagValue.noValue("region"), false);
+    Assertions.assertEquals(TagValue.noValue("region"), emea.backingTag().orElse(null));
+    DomainEntity markets =
+        domainManager.createDomain(
+            METALAKE, "Markets", null, null, TagValue.noValue("dept"), false);
+    DomainEntity child =
+        domainManager.createSubdomain(
+            METALAKE, "Markets", "Child", null, null, TagValue.noValue("plain_child"), true);
+    Assertions.assertEquals(TagValue.noValue("plain_child"), child.backingTag().orElse(null));
+
+    // A tag backs at most one domain, at creation and on update.
+    Assertions.assertThrows(
+        BackingTagAlreadyBoundException.class,
+        () ->
+            domainManager.createDomain(
+                METALAKE, "Apac", null, null, TagValue.noValue("region"), false));
+    Assertions.assertThrows(
+        BackingTagAlreadyBoundException.class,
+        () ->
+            domainManager.createSubdomain(
+                METALAKE, "Markets", "Apac", null, null, TagValue.noValue("region"), false));
+    Assertions.assertThrows(
+        BackingTagAlreadyBoundException.class,
+        () -> domainManager.updateBackingTag(METALAKE, "Child", TagValue.noValue("region")));
+    Assertions.assertThrows(
+        NoSuchDomainException.class, () -> domainManager.getDomain(METALAKE, "Apac"));
+
+    // A domain can move to a tag with allowed values once no other domain uses that tag.
+    domainManager.updateBackingTag(METALAKE, "Emea", null);
+    Assertions.assertEquals(
+        TagValue.noValue("region"),
+        domainManager
+            .updateBackingTag(METALAKE, "Child", TagValue.noValue("region"))
+            .backingTag()
+            .orElse(null));
+    Assertions.assertEquals(markets, domainManager.getDomain(METALAKE, "Markets"));
   }
 
   @Test

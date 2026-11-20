@@ -199,18 +199,20 @@ public class DomainIT extends BaseIT {
         metalake.alterDomain(
             name, DomainChange.removeProperty("key"), DomainChange.rename("Renamed_US_East"));
     assertTrue(changed.properties().isEmpty());
-    assertEquals(
-        TagValue.noValue(name.replace(".", "_") + " tag"), changed.backingTag().orElseThrow());
+    assertEquals(name.replace(".", "_") + " tag", changed.backingTag().orElseThrow());
     assertNull(metalake.alterDomain(changed.name(), DomainChange.updateComment(null)).comment());
     assertEquals("new", changed.comment());
     assertThrows(NoSuchDomainException.class, draft::publish);
 
     // An old snapshot addresses the replacement domain by name, not the original entity ID.
-    Domain replacement =
-        metalake.createDomain(name, null, null, TagValue.noValue("replacement tag"), true);
+    Domain replacement = metalake.createDomain(name, null, null, "replacement tag", true);
     assertEquals(Domain.Status.PUBLISHED, draft.publish().status());
     assertEquals(Domain.Status.DRAFT, replacement.status());
 
+    // Only a draft domain can be deleted.
+    assertThrows(IllegalArgumentException.class, () -> metalake.deleteDomain(name));
+    assertEquals(Domain.Status.PUBLISHED, metalake.getDomain(name).status());
+    assertEquals(Domain.Status.DRAFT, draft.unpublish().status());
     assertTrue(metalake.deleteDomain(name));
     assertFalse(metalake.deleteDomain(name));
     assertTrue(metalake.deleteDomain(changed.name()));
@@ -220,8 +222,7 @@ public class DomainIT extends BaseIT {
   void testHierarchyAndBackingTagChanges() {
     Domain parent = create("Parent_with_spaces");
     Domain other = create("Other_parent_name");
-    Domain child =
-        parent.createSubdomain("Tax_EU_child", null, null, TagValue.noValue("child tag"), true);
+    Domain child = parent.createSubdomain("Tax_EU_child", null, null, "child tag", true);
     assertEquals(parent.name(), child.parent().orElseThrow());
     assertArrayEquals(new String[] {child.name()}, parent.listSubdomains());
     assertEquals(child.name(), parent.listSubdomainsInfo()[0].name());
@@ -247,12 +248,12 @@ public class DomainIT extends BaseIT {
 
     // Removing a binding does not delete the tag or mutate the original snapshot.
     metalake.createTag("new backing", null, Collections.emptyMap());
-    assertEquals(
-        TagValue.noValue("new backing"),
-        child.updateBackingTag(TagValue.noValue("new backing")).backingTag().orElseThrow());
+    assertEquals("new backing", child.updateBackingTag("new backing").backingTag().orElseThrow());
     assertTrue(child.updateBackingTag(null).backingTag().isEmpty());
-    assertEquals(TagValue.noValue("child tag"), child.backingTag().orElseThrow());
+    assertEquals("child tag", child.backingTag().orElseThrow());
     assertNotNull(metalake.getTag("child tag"));
+    assertThrows(IllegalArgumentException.class, () -> metalake.deleteDomain(parent.name()));
+    parent.unpublish();
     assertTrue(metalake.deleteDomain(parent.name()));
   }
 
@@ -261,7 +262,7 @@ public class DomainIT extends BaseIT {
     Domain domain = create("errors");
     assertThrows(
         DomainAlreadyExistsException.class,
-        () -> metalake.createDomain(domain.name(), null, null, TagValue.noValue("another"), true));
+        () -> metalake.createDomain(domain.name(), null, null, "another", true));
     assertThrows(
         BackingTagAlreadyBoundException.class,
         () ->
@@ -271,6 +272,7 @@ public class DomainIT extends BaseIT {
         0,
         domain.listMembers(
                 DomainMemberFilter.builder()
+                    .withExpand(true)
                     .withTypes(MetadataObject.Type.TABLE, MetadataObject.Type.VIEW)
                     .withDomains("Tax_EU", "Trading_US_East")
                     .withNameContains("x /?&+%,")
@@ -353,45 +355,41 @@ public class DomainIT extends BaseIT {
             .asModelCatalog()
             .registerModel(NameIdentifier.of("schema", "model"), "", Collections.emptyMap());
 
-    // The schema supplies Finance membership; the nearest table assignment overrides it for Risk.
+    // The schema supplies Finance membership; values on the assignments are ignored. Different tags
+    // accumulate, so the hidden table is in both Finance and Risk.
     metalake.createTag(
         "department",
         null,
         Collections.emptyMap(),
         TagValueConstraint.ofAllowedValues("finance", "risk"));
-    Domain finance =
-        metalake.createDomain(
-            "Finance_US_East", null, null, TagValue.of("department", "finance"), false);
-    Domain risk =
-        metalake.createDomain("Risk_EU", null, null, TagValue.of("department", "risk"), false);
-    Domain child =
-        finance.createSubdomain(
-            "Trading_US_with_spaces", null, null, TagValue.noValue("trading"), true);
+    metalake.createTag("risk", null, Collections.emptyMap());
+    Domain finance = metalake.createDomain("Finance_US_East", null, null, "department", false);
+    Domain risk = metalake.createDomain("Risk_EU", null, null, "risk", false);
+    Domain child = finance.createSubdomain("Trading_US_with_spaces", null, null, "trading", true);
     catalog
         .asSchemas()
         .loadSchema("schema")
         .supportsTags()
-        .associateTags(new TagValue[] {TagValue.of("department", "finance")}, new TagValue[0]);
-    table.supportsTags().associateTags(new String[] {"trading"}, new String[0]);
-    hidden
-        .supportsTags()
         .associateTags(new TagValue[] {TagValue.of("department", "risk")}, new TagValue[0]);
+    table.supportsTags().associateTags(new String[] {"trading"}, new String[0]);
+    hidden.supportsTags().associateTags(new String[] {"risk"}, new String[0]);
     fileset
         .supportsTags()
         .associateTags(new TagValue[] {TagValue.of("department", "finance")}, new TagValue[0]);
     model
         .supportsTags()
-        .associateTags(new TagValue[] {TagValue.of("department", "finance")}, new TagValue[0]);
+        .associateTags(new TagValue[] {TagValue.of("department", "risk")}, new TagValue[0]);
 
     // An object can be inherited from Finance and reached through Trading at the same time.
     Map<String, DomainMember> members =
-        Arrays.stream(finance.listMembers(DomainMemberFilter.builder().build()))
+        Arrays.stream(finance.listMembers(DomainMemberFilter.builder().withExpand(true).build()))
             .collect(Collectors.toMap(member -> member.object().fullName(), member -> member));
     assertEquals(
         Set.of(
             "ice.schema.orders",
             "ice.schema.orders_view",
             "ice.schema.business",
+            "ice.schema.hidden",
             "files.schema.data",
             "models.schema.model"),
         members.keySet());
@@ -402,6 +400,30 @@ public class DomainIT extends BaseIT {
             .collect(Collectors.toSet()));
     assertEquals(
         DomainRelation.Type.DIRECT, members.get("files.schema.data").relations()[0].type());
+    assertEquals(
+        "ice.schema.hidden",
+        risk.listMembers(DomainMemberFilter.builder().withExpand(true).build())[0]
+            .object()
+            .fullName());
+
+    // By default the objects carrying a backing tag are listed, and the schema is listed once.
+    Map<String, DomainMember> direct =
+        Arrays.stream(finance.listMembers(DomainMemberFilter.builder().build()))
+            .collect(Collectors.toMap(member -> member.object().fullName(), member -> member));
+    assertEquals(
+        Set.of("ice.schema", "ice.schema.orders", "files.schema.data", "models.schema.model"),
+        direct.keySet());
+    assertEquals(MetadataObject.Type.SCHEMA, direct.get("ice.schema").object().type());
+    assertArrayEquals(
+        new DomainRelation[] {DomainRelation.direct()}, direct.get("ice.schema").relations());
+    assertArrayEquals(
+        new DomainRelation[] {DomainRelation.viaSubdomain(child.name())},
+        direct.get("ice.schema.orders").relations());
+    assertEquals(
+        1,
+        finance.listMembers(
+                DomainMemberFilter.builder().withTypes(MetadataObject.Type.SCHEMA).build())
+            .length);
     assertEquals(
         "ice.schema.hidden",
         risk.listMembers(DomainMemberFilter.builder().build())[0].object().fullName());
@@ -417,27 +439,36 @@ public class DomainIT extends BaseIT {
     assertEquals(
         1,
         finance.listMembers(
-                DomainMemberFilter.builder().withDomains(child.name(), "unknown_scope").build())
+                DomainMemberFilter.builder()
+                    .withExpand(true)
+                    .withDomains(child.name(), "unknown_scope")
+                    .build())
             .length);
     assertEquals(
-        5,
+        6,
         finance.listMembers(
-                DomainMemberFilter.builder().withDomains(finance.name(), child.name()).build())
+                DomainMemberFilter.builder()
+                    .withExpand(true)
+                    .withDomains(finance.name(), child.name())
+                    .build())
             .length);
     assertEquals(
         2,
         finance.listMembers(
                 DomainMemberFilter.builder()
+                    .withExpand(true)
                     .withTypes(MetadataObject.Type.VIEW, MetadataObject.Type.MODEL)
                     .build())
             .length);
     assertEquals(
         2,
-        finance.listMembers(DomainMemberFilter.builder().withNameContains("ORDERS").build())
+        finance.listMembers(
+                DomainMemberFilter.builder().withExpand(true).withNameContains("ORDERS").build())
             .length);
     assertEquals(
         0,
-        finance.listMembers(DomainMemberFilter.builder().withNameContains("/ ?&+%,").build())
+        finance.listMembers(
+                DomainMemberFilter.builder().withExpand(true).withNameContains("/ ?&+%,").build())
             .length);
 
     // Membership roll-ups follow hierarchy changes without retagging the leaf object.
@@ -454,110 +485,50 @@ public class DomainIT extends BaseIT {
   }
 
   @Test
-  void testNearestTagAssignmentAndValueMatching() {
+  void testMembershipIgnoresAssignmentValues() {
     Catalog catalog = createRelationalCatalog();
     Table table = createTable(catalog);
+    // An existing tag with an allowed-values list backs a domain without a value.
     metalake.createTag(
         "department",
         null,
         Collections.emptyMap(),
-        TagValueConstraint.ofAllowedValues("finance", "risk", "Finance"));
-    Domain finance =
-        metalake.createDomain("Finance", null, null, TagValue.of("department", "finance"), false);
-    Domain risk =
-        metalake.createDomain("Risk", null, null, TagValue.of("department", "risk"), false);
-    Domain caseSensitive =
-        metalake.createDomain(
-            "Capitalized", null, null, TagValue.of("department", "Finance"), false);
+        TagValueConstraint.ofAllowedValues("finance", "risk"));
+    Domain finance = metalake.createDomain("Finance", null, null, "department", false);
+    assertEquals("department", metalake.getDomain(finance.name()).backingTag().orElseThrow());
 
-    assertThrows(
-        IllegalArgumentException.class,
-        () -> finance.updateBackingTag(TagValue.of("department", "unknown")));
-    assertEquals(
-        TagValue.of("department", "finance"),
-        metalake.getDomain(finance.name()).backingTag().orElseThrow());
-
-    // A catalog assignment is inherited until a nearer schema assignment masks the same tag.
-    catalog
-        .supportsTags()
-        .associateTags(new TagValue[] {TagValue.of("department", "finance")}, new TagValue[0]);
-    assertTableRelations(
-        finance,
-        table,
-        DomainRelation.inherited(MetadataObjects.parse("ice", MetadataObject.Type.CATALOG)));
-    assertTableRelations(caseSensitive, table);
-    catalog
-        .asSchemas()
-        .loadSchema("schema")
-        .supportsTags()
-        .associateTags(new TagValue[] {TagValue.of("department", "risk")}, new TagValue[0]);
-    assertTableRelations(finance, table);
-    assertTableRelations(
-        risk,
-        table,
-        DomainRelation.inherited(MetadataObjects.parse("ice.schema", MetadataObject.Type.SCHEMA)));
-
-    // Multiple direct values match independently and case-sensitively; lower assignments stay
-    // masked.
-    table
-        .supportsTags()
-        .associateTags(
-            new TagValue[] {
-              TagValue.of("department", "finance"), TagValue.of("department", "Finance")
-            },
-            new TagValue[0]);
-    assertTableRelations(finance, table, DomainRelation.direct());
-    assertTableRelations(caseSensitive, table, DomainRelation.direct());
-    assertTableRelations(risk, table);
-    table
-        .supportsTags()
-        .associateTags(new TagValue[0], new TagValue[] {TagValue.of("department", "finance")});
-    assertTableRelations(finance, table);
-    assertTableRelations(caseSensitive, table, DomainRelation.direct());
-    assertTableRelations(risk, table);
-
-    // Removing the nearest assignment reveals schema, then catalog, then no membership.
-    table
-        .supportsTags()
-        .associateTags(new TagValue[0], new TagValue[] {TagValue.of("department", "Finance")});
-    assertTableRelations(
-        risk,
-        table,
-        DomainRelation.inherited(MetadataObjects.parse("ice.schema", MetadataObject.Type.SCHEMA)));
-    catalog
-        .asSchemas()
-        .loadSchema("schema")
-        .supportsTags()
-        .associateTags(new TagValue[0], new TagValue[] {TagValue.of("department", "risk")});
-    assertTableRelations(
-        finance,
-        table,
-        DomainRelation.inherited(MetadataObjects.parse("ice", MetadataObject.Type.CATALOG)));
-    catalog
-        .supportsTags()
-        .associateTags(new TagValue[0], new TagValue[] {TagValue.of("department", "finance")});
-    assertTableRelations(finance, table);
-    assertTableRelations(risk, table);
-    assertTableRelations(caseSensitive, table);
-
-    // A valueless backing binding matches both valued and valueless effective assignments.
-    metalake.createTag("any-value", null, Collections.emptyMap());
-    Domain any = metalake.createDomain("Any", null, null, TagValue.noValue("any-value"), false);
-    table
-        .supportsTags()
-        .associateTags(new TagValue[] {TagValue.of("any-value", "arbitrary")}, new TagValue[0]);
-    assertTableRelations(any, table, DomainRelation.direct());
-    table
-        .supportsTags()
-        .associateTags(
-            new TagValue[] {TagValue.noValue("any-value")},
-            new TagValue[] {TagValue.of("any-value", "arbitrary")});
-    assertTableRelations(any, table, DomainRelation.direct());
+    // A tag backs at most one domain, whether bound at creation or later.
     assertThrows(
         BackingTagAlreadyBoundException.class,
-        () ->
-            metalake.createDomain(
-                "Mixed", null, null, TagValue.of("any-value", "arbitrary"), false));
+        () -> metalake.createDomain("Risk", null, null, "department", false));
+    Domain risk = create("Risk");
+    assertThrows(BackingTagAlreadyBoundException.class, () -> risk.updateBackingTag("department"));
+
+    // Any value on an inherited or direct assignment matches.
+    catalog
+        .supportsTags()
+        .associateTags(new TagValue[] {TagValue.of("department", "risk")}, new TagValue[0]);
+    assertTableRelations(
+        finance,
+        table,
+        DomainRelation.inherited(MetadataObjects.parse("ice", MetadataObject.Type.CATALOG)));
+    table
+        .supportsTags()
+        .associateTags(new TagValue[] {TagValue.of("department", "finance")}, new TagValue[0]);
+    assertTableRelations(finance, table, DomainRelation.direct());
+
+    // Removing the direct assignment reveals the inherited one, then no membership.
+    table
+        .supportsTags()
+        .associateTags(new TagValue[0], new TagValue[] {TagValue.of("department", "finance")});
+    assertTableRelations(
+        finance,
+        table,
+        DomainRelation.inherited(MetadataObjects.parse("ice", MetadataObject.Type.CATALOG)));
+    catalog
+        .supportsTags()
+        .associateTags(new TagValue[0], new TagValue[] {TagValue.of("department", "risk")});
+    assertTableRelations(finance, table);
   }
 
   @Test
@@ -565,10 +536,8 @@ public class DomainIT extends BaseIT {
     Catalog catalog = createRelationalCatalog();
     Table table = createTable(catalog);
     Domain parent = create("Parent");
-    Domain first =
-        parent.createSubdomain("First_child_A", null, null, TagValue.noValue("first-tag"), true);
-    Domain second =
-        parent.createSubdomain("Second_child_B", null, null, TagValue.noValue("second-tag"), true);
+    Domain first = parent.createSubdomain("First_child_A", null, null, "first-tag", true);
+    Domain second = parent.createSubdomain("Second_child_B", null, null, "second-tag", true);
     catalog.supportsTags().associateTags(new String[] {"first-tag"}, new String[0]);
     catalog
         .asSchemas()
@@ -577,7 +546,7 @@ public class DomainIT extends BaseIT {
         .associateTags(new String[] {"second-tag"}, new String[0]);
     table
         .supportsTags()
-        .associateTags(new String[] {parent.backingTag().orElseThrow().name()}, new String[0]);
+        .associateTags(new String[] {parent.backingTag().orElseThrow()}, new String[0]);
 
     // The member appears once but retains direct membership and both independent roll-up paths.
     assertTableRelations(
@@ -597,6 +566,7 @@ public class DomainIT extends BaseIT {
     DomainMember[] selected =
         parent.listMembers(
             DomainMemberFilter.builder()
+                .withExpand(true)
                 .withDomains(first.name(), second.name())
                 .withTypes(MetadataObject.Type.TABLE)
                 .withNameContains("ORDERS")
@@ -607,6 +577,7 @@ public class DomainIT extends BaseIT {
         0,
         parent.listMembers(
                 DomainMemberFilter.builder()
+                    .withExpand(true)
                     .withDomains(first.name())
                     .withTypes(MetadataObject.Type.VIEW)
                     .build())
@@ -615,10 +586,12 @@ public class DomainIT extends BaseIT {
     // Child scopes do not include their siblings; detaching changes only the parent's roll-up.
     assertEquals(
         0,
-        first.listMembers(DomainMemberFilter.builder().withDomains(second.name()).build()).length);
+        first.listMembers(
+                DomainMemberFilter.builder().withExpand(true).withDomains(second.name()).build())
+            .length);
     table
         .supportsTags()
-        .associateTags(new String[0], new String[] {parent.backingTag().orElseThrow().name()});
+        .associateTags(new String[0], new String[] {parent.backingTag().orElseThrow()});
     assertTableRelations(
         parent,
         table,
@@ -634,8 +607,7 @@ public class DomainIT extends BaseIT {
 
     // Renaming a tag preserves its identity; deleting and recreating its name must not rebind it.
     metalake.alterTag("first-tag", TagChange.rename("renamed-first-tag"));
-    assertEquals(
-        "renamed-first-tag", metalake.getDomain(first.name()).backingTag().orElseThrow().name());
+    assertEquals("renamed-first-tag", metalake.getDomain(first.name()).backingTag().orElseThrow());
     assertTableRelations(parent, table, DomainRelation.viaSubdomain(first.name()));
     metalake.deleteTag("renamed-first-tag");
     assertTrue(metalake.getDomain(first.name()).backingTag().isEmpty());
@@ -644,7 +616,7 @@ public class DomainIT extends BaseIT {
     catalog.supportsTags().associateTags(new String[] {"renamed-first-tag"}, new String[0]);
     assertTableRelations(first, table);
     assertTableRelations(parent, table);
-    first.updateBackingTag(TagValue.noValue("renamed-first-tag"));
+    first.updateBackingTag("renamed-first-tag");
     assertTableRelations(
         first,
         table,
@@ -658,7 +630,7 @@ public class DomainIT extends BaseIT {
   void testInvalidHierarchyAtomicCreationAndIdempotence() {
     Domain parent = create("Parent");
     Domain other = create("Other");
-    Domain child = parent.createSubdomain("Child", null, null, TagValue.noValue("child-tag"), true);
+    Domain child = parent.createSubdomain("Child", null, null, "child-tag", true);
 
     metalake.createTag(
         "existing-valued-tag",
@@ -667,13 +639,9 @@ public class DomainIT extends BaseIT {
         TagValueConstraint.ofAllowedValues("finance"));
     Domain bound =
         parent.createSubdomain(
-            "Bound",
-            "existing tag",
-            Map.of("key", "value"),
-            TagValue.of("existing-valued-tag", "finance"),
-            false);
+            "Bound", "existing tag", Map.of("key", "value"), "existing-valued-tag", false);
     assertEquals(parent.name(), bound.parent().orElseThrow());
-    assertEquals(TagValue.of("existing-valued-tag", "finance"), bound.backingTag().orElseThrow());
+    assertEquals("existing-valued-tag", bound.backingTag().orElseThrow());
     assertEquals(Map.of("key", "value"), bound.properties());
     assertThrows(
         DomainAlreadyExistsException.class,
@@ -683,15 +651,12 @@ public class DomainIT extends BaseIT {
     // Hierarchy validation must leave neither a new domain nor its requested backing tag behind.
     assertThrows(
         IllegalArgumentException.class,
-        () ->
-            child.createSubdomain(
-                "Grandchild", null, null, TagValue.noValue("grandchild-tag"), true));
+        () -> child.createSubdomain("Grandchild", null, null, "grandchild-tag", true));
     assertThrows(NoSuchDomainException.class, () -> metalake.getDomain("Grandchild"));
     assertThrows(NoSuchTagException.class, () -> metalake.getTag("grandchild-tag"));
     assertThrows(
         DomainAlreadyExistsException.class,
-        () ->
-            metalake.createDomain(parent.name(), null, null, TagValue.noValue("unused-tag"), true));
+        () -> metalake.createDomain(parent.name(), null, null, "unused-tag", true));
     assertThrows(NoSuchTagException.class, () -> metalake.getTag("unused-tag"));
     assertThrows(IllegalArgumentException.class, () -> child.attachToParent(child.name()));
     assertThrows(IllegalArgumentException.class, () -> other.attachToParent(child.name()));
@@ -728,83 +693,60 @@ public class DomainIT extends BaseIT {
     assertThrows(NoSuchDomainException.class, removed::listSubdomainsInfo);
     assertThrows(
         NoSuchDomainException.class,
-        () -> removed.listMembers(DomainMemberFilter.builder().build()));
+        () -> removed.listMembers(DomainMemberFilter.builder().withExpand(true).build()));
     assertThrows(
         NoSuchDomainException.class,
-        () -> removed.createSubdomain("orphan", null, null, TagValue.noValue("orphan-tag"), true));
+        () -> removed.createSubdomain("orphan", null, null, "orphan-tag", true));
     assertThrows(NoSuchTagException.class, () -> metalake.getTag("orphan-tag"));
     assertFalse(metalake.deleteDomain(removed.name()));
 
     Domain domain = create("binding-errors");
     assertThrows(NoSuchDomainException.class, () -> domain.attachToParent("missing-parent"));
     assertTrue(metalake.getDomain(domain.name()).parent().isEmpty());
-    assertThrows(
-        NoSuchTagException.class, () -> domain.updateBackingTag(TagValue.noValue("absent-tag")));
+    assertThrows(NoSuchTagException.class, () -> domain.updateBackingTag("absent-tag"));
     assertEquals(domain.backingTag(), metalake.getDomain(domain.name()).backingTag());
 
     // Failed creation must neither adopt an existing tag nor create a partial domain.
     assertThrows(
         NoSuchTagException.class,
-        () ->
-            metalake.createDomain(
-                "missing-binding", null, null, TagValue.noValue("absent-tag"), false));
+        () -> metalake.createDomain("missing-binding", null, null, "absent-tag", false));
     assertThrows(
         TagAlreadyExistsException.class,
         () ->
             metalake.createDomain(
                 "existing-binding", null, null, domain.backingTag().orElseThrow(), true));
-    assertThrows(
-        IllegalArgumentException.class,
-        () ->
-            metalake.createDomain(
-                "valued-new-tag", null, null, TagValue.of("invalid-new-tag", "value"), true));
-    for (String name : List.of("missing-binding", "existing-binding", "valued-new-tag", "orphan")) {
+    for (String name : List.of("missing-binding", "existing-binding", "orphan")) {
       assertThrows(NoSuchDomainException.class, () -> metalake.getDomain(name));
     }
-    assertThrows(NoSuchTagException.class, () -> metalake.getTag("invalid-new-tag"));
-    assertNotNull(metalake.getTag(domain.backingTag().orElseThrow().name()));
+    assertNotNull(metalake.getTag(domain.backingTag().orElseThrow()));
   }
 
   @Test
-  void testBackingTagValueLengthBoundaries() {
+  void testUnicodeAssignmentValuesAreIgnored() {
     Table table = createTable(createRelationalCatalog());
     String[] values = {"x".repeat(256), "😀".repeat(128)};
     for (int index = 0; index < values.length; index++) {
       String tagName = "unicode-boundary-" + index;
       metalake.createTag(tagName, null, Collections.emptyMap());
       String name = "F".repeat(63) + index;
-      TagValue binding = TagValue.of(tagName, values[index]);
       Domain domain =
           metalake.createDomain(
-              name, "Unicode comment 中文😀", Map.of("region", "亚洲😀"), binding, false);
+              name, "Unicode comment 中文😀", Map.of("region", "亚洲😀"), tagName, false);
       assertEquals(name, metalake.getDomain(name).name());
-      assertEquals(binding, metalake.getDomain(name).backingTag().orElseThrow());
+      assertEquals(tagName, metalake.getDomain(name).backingTag().orElseThrow());
       assertEquals("亚洲😀", metalake.getDomain(name).properties().get("region"));
 
-      // Boundary values must survive JSON, storage and effective-tag membership resolution.
-      table.supportsTags().associateTags(new TagValue[] {binding}, new TagValue[0]);
+      // A boundary value on the assignment does not affect membership.
+      table
+          .supportsTags()
+          .associateTags(new TagValue[] {TagValue.of(tagName, values[index])}, new TagValue[0]);
       assertTableRelations(domain, table, DomainRelation.direct());
       String renamed = "Tax-" + index;
       Domain changed = metalake.alterDomain(name, DomainChange.rename(renamed));
       assertEquals(renamed, metalake.getDomain(renamed).name());
-      assertEquals(binding, changed.backingTag().orElseThrow());
+      assertEquals(tagName, changed.backingTag().orElseThrow());
       assertTableRelations(changed, table, DomainRelation.direct());
       assertThrows(NoSuchDomainException.class, () -> metalake.getDomain(name));
-
-      // Both ASCII and supplementary characters use the same 256 UTF-16-unit limit.
-      String invalid = values[index] + "x";
-      assertThrows(
-          IllegalArgumentException.class,
-          () -> changed.updateBackingTag(TagValue.of(tagName, invalid)));
-      assertEquals(binding, metalake.getDomain(renamed).backingTag().orElseThrow());
-      String rejectedName = "rejected-boundary-" + index;
-      assertThrows(
-          IllegalArgumentException.class,
-          () ->
-              metalake.createDomain(
-                  rejectedName, null, null, TagValue.of(tagName, invalid), false));
-      assertThrows(NoSuchDomainException.class, () -> metalake.getDomain(rejectedName));
-      assertTableRelations(changed, table, DomainRelation.direct());
     }
   }
 
@@ -813,11 +755,7 @@ public class DomainIT extends BaseIT {
     Table table = createTable(createRelationalCatalog());
     Domain created =
         metalake.createDomain(
-            "value-contract",
-            "original",
-            Map.of("key", "value"),
-            TagValue.noValue("value-contract-tag"),
-            true);
+            "value-contract", "original", Map.of("key", "value"), "value-contract-tag", true);
     Domain loaded = metalake.getDomain(created.name());
     Domain listed = metalake.listDomainsInfo()[0];
     assertEquals(created, loaded);
@@ -830,7 +768,7 @@ public class DomainIT extends BaseIT {
 
     table.supportsTags().associateTags(new String[] {"value-contract-tag"}, new String[0]);
     DomainMemberFilter filter =
-        DomainMemberFilter.builder().withTypes(MetadataObject.Type.TABLE).build();
+        DomainMemberFilter.builder().withExpand(true).withTypes(MetadataObject.Type.TABLE).build();
     DomainMember member = loaded.listMembers(filter)[0];
     DomainMember reloaded = loaded.listMembers(filter)[0];
     MetadataObject object = MetadataObjects.parse("ice.schema.orders", MetadataObject.Type.TABLE);
@@ -880,6 +818,7 @@ public class DomainIT extends BaseIT {
     DomainMember[] members =
         domain.listMembers(
             DomainMemberFilter.builder()
+                .withExpand(true)
                 .withTypes(MetadataObject.Type.TABLE)
                 .withNameContains("ice.schema.orders")
                 .build());
@@ -904,7 +843,6 @@ public class DomainIT extends BaseIT {
   }
 
   private Domain create(String name) {
-    return metalake.createDomain(
-        name, null, null, TagValue.noValue(name.replace(".", "_") + " tag"), true);
+    return metalake.createDomain(name, null, null, name.replace(".", "_") + " tag", true);
   }
 }

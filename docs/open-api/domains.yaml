@@ -69,7 +69,7 @@ paths:
       summary: Create a domain
       operationId: createDomain
       description: >-
-        Creates a DRAFT domain, its optional parent edge and an optional new backing tag atomically. A failure leaves no new domain or tag behind. Requires MANAGE_DOMAIN on the metalake and, when specified, the parent. The backing tag must be explicit: create=true never adopts an existing tag and cannot include a value. Bindings use tag identity, so tag rename preserves a binding while delete/recreate does not. A tag can back one domain without a value, or multiple domains with distinct exact values; these forms cannot be mixed. A new tag additionally requires CREATE_TAG on the metalake; an existing tag requires ownership of that tag or the metalake. Hidden drafts return 404; other permission failures return 403.
+        Creates a DRAFT domain, its optional parent edge and an optional new backing tag atomically. A failure leaves no new domain or tag behind. Requires MANAGE_DOMAIN on the metalake and, when specified, the parent. The backing tag must be explicit: create=true creates a new valueless tag and never adopts an existing tag; create=false binds an existing tag whatever values it allows. Bindings use tag identity, so tag rename preserves a binding while delete/recreate does not. A tag backs at most one domain. Membership depends only on the presence of the tag; any value on an assignment is ignored. A new tag additionally requires CREATE_TAG on the metalake; an existing tag requires ownership of that tag or the metalake. Hidden drafts return 404; other permission failures return 403.
       requestBody:
         required: true
         content:
@@ -238,10 +238,12 @@ paths:
       summary: Delete a domain
       operationId: deleteDomain
       description: >-
-        Deletes only the domain and its parent edge. The backing tag, its assignments and member
-        metadata objects remain unchanged; member objects do not prevent deletion. Deletion does
-        not cascade to subdomains: a domain with subdomains fails with HTTP 409,
-        NonEmptyDomainException and error code 1005. Returns dropped=false if the domain is absent
+        Deletes only the domain and its parent edge. Only a draft domain can be deleted: deleting a
+        published domain fails with HTTP 400 and IllegalArgumentException; unpublish it first. The
+        backing tag, its assignments and member metadata objects remain unchanged; member objects
+        do not prevent deletion. Deletion does not cascade to subdomains: a draft domain with
+        subdomains fails with HTTP 409, NonEmptyDomainException and error code 1005. The status is checked
+        before the subdomains, so a published domain with subdomains fails with HTTP 400. Returns dropped=false if the domain is absent
         or is a draft hidden from the caller; a hidden draft is not deleted.
         Requires MANAGE_DOMAIN on the domain, inherited from its current parent or the metalake.
         Other permission failures return 403.
@@ -267,7 +269,7 @@ paths:
               schema:
                 $ref: "./openapi.yaml#/components/schemas/ErrorModel"
         "409":
-          description: The metalake is disabled, the domain has subdomains, or the deletion conflicts with a concurrent update.
+          description: The metalake is disabled, the domain is a draft with subdomains, or the deletion conflicts with a concurrent update.
           content:
             application/json:
               schema:
@@ -367,7 +369,7 @@ paths:
       summary: Set or remove the backing tag
       operationId: setDomainBackingTag
       description: >-
-        Binds an existing tag with an optional exact value, or removes the binding when backingTag is null. Members are not migrated; previous tag assignments remain unchanged. Requires MANAGE_DOMAIN on the domain, inherited from its current parent or the metalake. Binding a tag additionally requires ownership of that tag or the metalake; removing a binding needs no tag privilege. Hidden drafts return 404; other permission failures return 403.
+        Binds an existing tag by name, whatever values it allows, or removes the binding when backingTag is null. A tag backs at most one domain. Members are not migrated; previous tag assignments remain unchanged. Requires MANAGE_DOMAIN on the domain, inherited from its current parent or the metalake. Binding a tag additionally requires ownership of that tag or the metalake; removing a binding needs no tag privilege. Hidden drafts return 404; other permission failures return 403.
       requestBody:
         required: true
         content:
@@ -461,12 +463,16 @@ paths:
       - $ref: "#/components/parameters/domain"
     get:
       tags: [domain]
-      summary: List recorded domain members
+      summary: List domain members
       operationId: listDomainMembers
       description: >-
-        Lists recorded leaf objects in the domain's scope, including subdomains, once each with
-        all applicable relations. Tagged catalogs and schemas expand to recorded leaves; an empty
-        result does not imply that unrecorded external objects are not members. Filters intersect.
+        Lists members in the domain's scope, including subdomains, once each with all applicable
+        relations. By default, lists the objects that directly carry the backing tag of the domain
+        or a visible subdomain, including catalogs and schemas. Directly tagged descendants appear
+        even when their container matches. Relations are DIRECT or VIA_SUBDOMAIN. With
+        expand=true, tagged catalogs and schemas expand to the recorded leaves that inherit the tag,
+        with INHERITED relations where they apply; an empty result does not imply that unrecorded
+        external objects are not members. Filters intersect.
         No paging or counts are provided. Only visible domains and objects accessible to the caller are returned. Hidden drafts return 404, and hidden subdomain relations are omitted. No tag privilege is required.
       parameters:
         - name: domains
@@ -484,22 +490,28 @@ paths:
               $ref: "#/components/schemas/DomainName"
         - name: types
           in: query
-          description: Comma-separated leaf types, case-insensitive, with whitespace around each token trimmed. Omit to include all supported types. Blank tokens and unsupported types return 400.
+          description: Comma-separated member types, case-insensitive, with whitespace around each token trimmed. Omit to include all types. Blank tokens, unsupported types, and CATALOG or SCHEMA with expand=true return 400.
           style: form
           explode: false
           schema:
             type: array
             items:
-              $ref: "#/components/schemas/MemberType"
+              $ref: "#/components/schemas/ListedMemberType"
         - name: nameContains
           in: query
           description: Nonblank substring of the member's complete full name, matched case-insensitively; no wildcard or regex interpretation. Omit for any name. Blank text returns 400.
           schema:
             type: string
             minLength: 1
+        - name: expand
+          in: query
+          description: Whether to expand tagged catalogs and schemas into the recorded leaves under them that inherit the backing tag. Defaults to false, which lists the objects that carry the backing tag themselves.
+          schema:
+            type: boolean
+            default: false
       responses:
         "200":
-          description: The matching recorded members.
+          description: The matching members.
           content:
             application/vnd.gravitino.v1+json:
               schema:
@@ -533,7 +545,7 @@ paths:
       - name: type
         in: path
         required: true
-        description: Leaf metadata object type, case-insensitive. Catalogs and schemas are not members.
+        description: Leaf metadata object type, case-insensitive. Catalogs and schemas are not supported for object-to-domain lookup.
         schema:
           $ref: "#/components/schemas/MemberType"
       - name: fullName
@@ -637,6 +649,11 @@ components:
       description: A supported leaf domain member type.
       enum: [TABLE, VIEW, FILESET, TOPIC, MODEL, SEMANTIC_MODEL]
 
+    ListedMemberType:
+      type: string
+      description: A type of listed domain member. CATALOG and SCHEMA are listed only without expand.
+      enum: [CATALOG, SCHEMA, TABLE, VIEW, FILESET, TOPIC, MODEL, SEMANTIC_MODEL]
+
     DomainRelation:
       type: object
       description: One applicable membership relation relative to the queried domain, with no precedence over other relations. All applicable relations are returned; a direct assignment masks inheritance of the same tag.
@@ -664,14 +681,14 @@ components:
 
     MemberObject:
       type: object
-      description: A leaf metadata object serialized by the server.
+      description: A member metadata object serialized by the server. Direct listings can include a catalog or schema alongside its directly tagged descendants.
       required: [fullName, type]
       properties:
         fullName:
           type: string
         type:
           type: string
-          enum: [table, view, fileset, topic, model, semantic_model]
+          enum: [catalog, schema, table, view, fileset, topic, model, semantic_model]
 
     DomainMember:
       type: object
@@ -717,10 +734,7 @@ components:
           properties:
             name:
               type: string
-            value:
-              type: string
-              nullable: true
-              description: Null matches any effective assignment of this tag, including valueless assignments.
+              description: The name of the backing tag. Objects that carry the tag are members whatever values the assignment has.
         audit:
           $ref: "./openapi.yaml#/components/schemas/Audit"
         relations:
@@ -731,17 +745,21 @@ components:
             $ref: "#/components/schemas/DomainRelation"
 
     DomainMemberListResponse:
+      description: >-
+        The example is a default (direct) listing. With expand=true, the schema is replaced by its
+        leaves, which report inherited relations.
       example:
         code: 0
         members:
           - object:
+              fullName: cat.schema
+              type: schema
+            relations:
+              - relation: direct
+          - object:
               fullName: cat.schema.table
               type: table
             relations:
-              - relation: inherited
-                source:
-                  fullName: cat.schema
-                  type: schema
               - relation: via_subdomain
                 source:
                   fullName: Finance_US
@@ -812,16 +830,16 @@ components:
     BackingTag:
       type: object
       required: [name]
+      additionalProperties: false
       properties:
         name:
           type: string
           minLength: 1
-        value:
-          type: string
-          nullable: true
-          minLength: 1
-          maxLength: 256
-          description: Exact assignment value; null binds any effective assignment of the tag.
+          description: The name of the backing tag.
+        create:
+          type: boolean
+          default: false
+          description: True creates a new valueless tag. False binds an existing tag, whatever values it allows.
 
     DomainName:
       type: string
@@ -855,19 +873,11 @@ components:
               enum: [null]
           description: Optional top-level parent. A subdomain is created atomically under it.
         backingTag:
-          allOf:
-            - $ref: "#/components/schemas/BackingTag"
-            - type: object
-              properties:
-                create:
-                  type: boolean
-                  default: false
-                  description: True creates a new valueless tag; value must be null or omitted. False binds an existing tag.
+          $ref: "#/components/schemas/BackingTag"
       example:
         name: Finance
         backingTag:
-          name: department
-          value: finance
+          name: finance
           create: false
 
     DomainSetRequest:
@@ -898,16 +908,12 @@ components:
           type: object
           nullable: true
           required: [name]
+          additionalProperties: false
           properties:
             name:
               type: string
               minLength: 1
-            value:
-              type: string
-              nullable: true
-              minLength: 1
-              maxLength: 256
-              description: Exact assignment value; null binds any effective assignment of the tag.
+              description: The name of the existing tag to bind.
 
     DomainUpdatesRequest:
       type: object
